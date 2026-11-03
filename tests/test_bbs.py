@@ -1,3 +1,4 @@
+import sqlite3
 import tempfile
 import unittest
 from pathlib import Path
@@ -34,7 +35,7 @@ class BulletinBoardTests(unittest.TestCase):
                 self.bbs.send_mail("alice", "bob", value)
         with self.assertRaises(ValueError):
             self.bbs.list_posts(1, 1000)
-        with self.assertRaises(ValueError):
+        with self.assertRaises(sqlite3.IntegrityError):
             self.bbs.post(999, "alice", "no board")
 
 
