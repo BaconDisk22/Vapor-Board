@@ -3,6 +3,7 @@ import tkinter as tk
 from tkinter import ttk
 from pathlib import Path
 from .config import load_shop_config
+from .status import StatusSnapshot
 
 
 def main():
@@ -33,7 +34,7 @@ def main():
         tabs.add(page, text=title)
         ttk.Label(page, text=message, wraplength=600).pack(anchor="w")
 
-    footer = tk.Label(root, text="Radio: NOT CONNECTED  |  TX: DISABLED  |  MQTT: DISABLED",
+    footer = tk.Label(root, text=StatusSnapshot().footer,
                       bg="#15212A", fg="#FFFFFF", padx=20, pady=14, anchor="w")
     footer.pack(fill="x")
     root.mainloop()
