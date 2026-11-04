@@ -32,7 +32,7 @@ def main():
     tabs.pack(fill="both", expand=True, padx=20, pady=12)
     for title, message in (
         ("Overview", "Connect to a Meshtastic radio explicitly from this tab."),
-        ("Boards", "Bulletin board integration is not enabled in this preview."),
+        ("Boards", "Local bulletin boards"),
         ("Messages", "Private messaging integration is not enabled in this preview."),
         ("Customers", "Customer approvals require a trusted identity provider; not available here."),
         ("Settings", "Settings are loaded from ~/.vapor-board/shop.json (read-only preview)."),
@@ -45,7 +45,7 @@ def main():
     board_page = tabs.nametowidget(tabs.tabs()[1])
     for child in board_page.winfo_children():
         child.destroy()
-    ttk.Label(board_page, text="Local operator board viewer (read-only)").pack(anchor="w")
+    ttk.Label(board_page, text="Local operator boards — local storage only").pack(anchor="w")
     board_list = tk.Listbox(board_page, height=8, exportselection=False)
     board_list.pack(fill="x", pady=6)
     posts = tk.Text(board_page, height=10, wrap="word", state="disabled")
