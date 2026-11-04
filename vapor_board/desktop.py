@@ -7,6 +7,7 @@ from .config import load_shop_config
 from .status import StatusSnapshot
 from .tcp import TcpSettings, ConnectionState
 from .radio_worker import RadioWorker
+from .radio_event_state import RadioDisplayState, reduce_event
 from .board_browser import BoardBrowser
 
 
@@ -95,9 +96,7 @@ def main():
     ttk.Label(radio_page, textvariable=radio_status, wraplength=550).pack(anchor="w", pady=10)
     counters = tk.StringVar(value="Decoded protobuf messages: 0")
     ttk.Label(radio_page, textvariable=counters).pack(anchor="w")
-    count = [0]
-    connection = [ConnectionState.DISCONNECTED]
-    verified = [False]
+    display_state = [RadioDisplayState()]
 
     def connect_radio():
         try:
@@ -106,15 +105,13 @@ def main():
             radio_status.set(f"Invalid connection settings: {exc}")
             return
         if worker.start(settings):
-            connection[0] = ConnectionState.CONNECTING
-            verified[0] = False
+            display_state[0] = reduce_event(display_state[0], ('connecting', None))
             radio_status.set("Connecting to TCP; radio protocol unverified")
             update_footer()
 
     def disconnect_radio():
         worker.stop()
-        connection[0] = ConnectionState.DISCONNECTED
-        verified[0] = False
+        display_state[0] = reduce_event(display_state[0], ('disconnected', None))
         radio_status.set("Disconnect requested")
         update_footer()
 
@@ -124,7 +121,7 @@ def main():
     ttk.Button(controls, text="Disconnect", command=disconnect_radio).pack(side="left")
 
     def update_footer():
-        footer.configure(text=StatusSnapshot(tcp_state=connection[0], protocol_verified=verified[0]).footer)
+        footer.configure(text=StatusSnapshot(tcp_state=display_state[0].tcp, protocol_verified=display_state[0].protocol_verified).footer)
 
     def poll_radio():
         if not root.winfo_exists():
@@ -134,24 +131,9 @@ def main():
             if event is None:
                 break
             kind, data = event
-            if kind == "connecting":
-                connection[0] = ConnectionState.CONNECTING
-            elif kind == "tcp_open":
-                connection[0] = ConnectionState.CONNECTED
-                radio_status.set("TCP connected; awaiting protobuf data")
-            elif kind == "protobuf":
-                verified[0] = True
-                count[0] += 1
-                counters.set(f"Decoded protobuf messages: {count[0]}")
-                radio_status.set(f"Received protobuf variant: {data.get('variant', 'unknown')}")
-            elif kind == "error":
-                verified[0] = False
-                connection[0] = ConnectionState.ERROR
-                radio_status.set(f"Radio error: {data}")
-            elif kind == "disconnected":
-                verified[0] = False
-                connection[0] = ConnectionState.DISCONNECTED
-                radio_status.set("Radio disconnected")
+            display_state[0] = reduce_event(display_state[0], event)
+            counters.set(f"Decoded protobuf messages: {display_state[0].decoded}")
+            radio_status.set(display_state[0].detail)
             update_footer()
         root.after(100, poll_radio)
 
