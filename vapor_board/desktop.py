@@ -4,6 +4,7 @@ from tkinter import ttk
 from pathlib import Path
 from .config import load_shop_config
 from .status import StatusSnapshot
+from .board_browser import BoardBrowser
 
 
 def main():
@@ -33,6 +34,47 @@ def main():
         page = ttk.Frame(tabs, padding=20)
         tabs.add(page, text=title)
         ttk.Label(page, text=message, wraplength=600).pack(anchor="w")
+
+    # Trusted local operator view only. Do not expose this to remote customers.
+    board_page = tabs.nametowidget(tabs.tabs()[1])
+    for child in board_page.winfo_children():
+        child.destroy()
+    ttk.Label(board_page, text="Local operator board viewer (read-only)").pack(anchor="w")
+    board_list = tk.Listbox(board_page, height=8, exportselection=False)
+    board_list.pack(fill="x", pady=6)
+    posts = tk.Text(board_page, height=10, wrap="word", state="disabled")
+    posts.pack(fill="both", expand=True)
+    database = Path.home() / ".vapor-board" / "bbs.sqlite"
+    selected_boards = []
+
+    def show_posts(_event=None):
+        selection = board_list.curselection()
+        if not selection:
+            return
+        try:
+            entries = BoardBrowser(database).posts(selected_boards[selection[0]]["id"])
+            content = "\\n\\n".join(f'{p["author"]}: {p["body"]}' for p in entries) or "No posts yet."
+        except (OSError, ValueError) as exc:
+            content = f"Unable to read local posts: {exc}"
+        posts.configure(state="normal")
+        posts.delete("1.0", "end")
+        posts.insert("1.0", content)
+        posts.configure(state="disabled")
+
+    def refresh_boards():
+        nonlocal selected_boards
+        board_list.delete(0, "end")
+        try:
+            selected_boards = BoardBrowser(database).boards()
+            for board in selected_boards:
+                board_list.insert("end", board["name"])
+        except (OSError, ValueError) as exc:
+            selected_boards = []
+            board_list.insert("end", f"Local database unavailable: {exc}")
+
+    ttk.Button(board_page, text="Refresh local boards", command=refresh_boards).pack(anchor="w")
+    board_list.bind("<<ListboxSelect>>", show_posts)
+    refresh_boards()
 
     footer = tk.Label(root, text=StatusSnapshot().footer,
                       bg="#15212A", fg="#FFFFFF", padx=20, pady=14, anchor="w")
