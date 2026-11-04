@@ -1,4 +1,4 @@
-"""Vapor Board local-only Tkinter desktop preview. No radio networking."""
+"""Vapor Board local-only desktop with opt-in receive-only radio TCP."""
 import sqlite3
 import tkinter as tk
 from tkinter import ttk
@@ -14,7 +14,7 @@ from .board_browser import BoardBrowser
 def main():
     config = load_shop_config(Path.home() / ".vapor-board" / "shop.json")
     root = tk.Tk()
-    root.title(f"{config.shop_name} — Desktop Preview")
+    root.title(f"{config.shop_name} — Desktop")
     root.geometry("760x520")
     root.minsize(580, 380)
     root.configure(bg="#15212A")
@@ -23,13 +23,13 @@ def main():
     header.pack(fill="x")
     tk.Label(header, text=config.shop_name, bg="#15212A", fg="#FFFFFF",
              font=("Helvetica", 24, "bold")).pack(anchor="w")
-    tk.Label(header, text="LOCAL DESKTOP PREVIEW • NO RADIO CONNECTION",
+    tk.Label(header, text="LOCAL DESKTOP • RADIO CONNECTION IS OPT-IN",
              bg="#15212A", fg="#B7D3D9", font=("Helvetica", 11)).pack(anchor="w", pady=(8, 0))
 
     tabs = ttk.Notebook(root)
     tabs.pack(fill="both", expand=True, padx=20, pady=12)
     for title, message in (
-        ("Overview", "Vapor Board is running locally. No radio connection has been attempted."),
+        ("Overview", "Connect to a Meshtastic radio explicitly from this tab."),
         ("Boards", "Bulletin board integration is not enabled in this preview."),
         ("Messages", "Private messaging integration is not enabled in this preview."),
         ("Customers", "Customer approvals require a trusted identity provider; not available here."),
