@@ -8,7 +8,7 @@ class DesktopRadioSourceTests(unittest.TestCase):
         ast.parse(source)
         self.assertIn("RadioWorker()", source)
         self.assertIn("worker.stop()", source)
-        self.assertIn("protocol_verified=verified[0]", source)
+        self.assertIn("protocol_verified=display_state[0].protocol_verified", source)
         self.assertIn("root.after(100, poll_radio)", source)
 
 if __name__ == "__main__": unittest.main()
