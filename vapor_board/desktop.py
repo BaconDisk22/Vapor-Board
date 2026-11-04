@@ -1,4 +1,5 @@
 """Vapor Board local-only Tkinter desktop preview. No radio networking."""
+import sqlite3
 import tkinter as tk
 from tkinter import ttk
 from pathlib import Path
@@ -54,7 +55,7 @@ def main():
         try:
             entries = BoardBrowser(database).posts(selected_boards[selection[0]]["id"])
             content = "\\n\\n".join(f'{p["author"]}: {p["body"]}' for p in entries) or "No posts yet."
-        except (OSError, ValueError) as exc:
+        except (OSError, ValueError, sqlite3.DatabaseError) as exc:
             content = f"Unable to read local posts: {exc}"
         posts.configure(state="normal")
         posts.delete("1.0", "end")
@@ -68,7 +69,7 @@ def main():
             selected_boards = BoardBrowser(database).boards()
             for board in selected_boards:
                 board_list.insert("end", board["name"])
-        except (OSError, ValueError) as exc:
+        except (OSError, ValueError, sqlite3.DatabaseError) as exc:
             selected_boards = []
             board_list.insert("end", f"Local database unavailable: {exc}")
 
