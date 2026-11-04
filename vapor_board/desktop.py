@@ -96,6 +96,27 @@ def main():
 
     ttk.Button(operator_controls, text="Create local board", command=create_local_board).pack(side="left", padx=6)
 
+    ttk.Label(board_page, text="Local post author").pack(anchor="w")
+    author_name = tk.StringVar(value="Operator")
+    ttk.Entry(board_page, textvariable=author_name).pack(fill="x")
+    ttk.Label(board_page, text="Post body (local database only)").pack(anchor="w")
+    post_editor = tk.Text(board_page, height=4, wrap="word")
+    post_editor.pack(fill="x")
+
+    def save_local_post():
+        selected = board_list.curselection()
+        if not selected or selected[0] >= len(selected_boards):
+            messagebox.showwarning("Select board", "Choose a board first.")
+            return
+        try:
+            BulletinBoard(database).post(selected_boards[selected[0]]["id"], author_name.get(), post_editor.get("1.0", "end-1c"))
+        except (ValueError, OSError, sqlite3.DatabaseError) as exc:
+            messagebox.showerror("Post not saved", str(exc))
+            return
+        post_editor.delete("1.0", "end")
+        show_posts()
+
+    ttk.Button(board_page, text="Save local post", command=save_local_post).pack(anchor="w")
     ttk.Button(board_page, text="Refresh local boards", command=refresh_boards).pack(anchor="w")
     board_list.bind("<<ListboxSelect>>", show_posts)
     refresh_boards()
