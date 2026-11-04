@@ -5,6 +5,8 @@ from tkinter import ttk
 from pathlib import Path
 from .config import load_shop_config
 from .status import StatusSnapshot
+from .tcp import TcpSettings, ConnectionState
+from .radio_worker import RadioWorker
 from .board_browser import BoardBrowser
 
 
@@ -77,9 +79,91 @@ def main():
     board_list.bind("<<ListboxSelect>>", show_posts)
     refresh_boards()
 
+    # Radio connections are explicit and receive-only.
+    radio_page = tabs.nametowidget(tabs.tabs()[0])
+    for child in radio_page.winfo_children():
+        child.destroy()
+    worker = RadioWorker()
+    ttk.Label(radio_page, text="Meshtastic Wi-Fi/TCP — receive only").pack(anchor="w")
+    host_var = tk.StringVar(value="127.0.0.1")
+    port_var = tk.StringVar(value="4403")
+    ttk.Label(radio_page, text="Radio IP / host").pack(anchor="w")
+    ttk.Entry(radio_page, textvariable=host_var).pack(fill="x")
+    ttk.Label(radio_page, text="TCP port").pack(anchor="w")
+    ttk.Entry(radio_page, textvariable=port_var).pack(fill="x")
+    radio_status = tk.StringVar(value="Disconnected — no connection attempted")
+    ttk.Label(radio_page, textvariable=radio_status, wraplength=550).pack(anchor="w", pady=10)
+    counters = tk.StringVar(value="Decoded protobuf messages: 0")
+    ttk.Label(radio_page, textvariable=counters).pack(anchor="w")
+    count = [0]
+    connection = [ConnectionState.DISCONNECTED]
+    verified = [False]
+
+    def connect_radio():
+        try:
+            settings = TcpSettings(host=host_var.get().strip(), port=int(port_var.get()), timeout=3.0)
+        except (ValueError, TypeError) as exc:
+            radio_status.set(f"Invalid connection settings: {exc}")
+            return
+        if worker.start(settings):
+            connection[0] = ConnectionState.CONNECTING
+            verified[0] = False
+            radio_status.set("Connecting to TCP; radio protocol unverified")
+            update_footer()
+
+    def disconnect_radio():
+        worker.stop()
+        connection[0] = ConnectionState.DISCONNECTED
+        verified[0] = False
+        radio_status.set("Disconnect requested")
+        update_footer()
+
+    controls = ttk.Frame(radio_page)
+    controls.pack(anchor="w", pady=8)
+    ttk.Button(controls, text="Connect", command=connect_radio).pack(side="left", padx=(0, 8))
+    ttk.Button(controls, text="Disconnect", command=disconnect_radio).pack(side="left")
+
+    def update_footer():
+        footer.configure(text=StatusSnapshot(tcp_state=connection[0], protocol_verified=verified[0]).footer)
+
+    def poll_radio():
+        if not root.winfo_exists():
+            return
+        for _ in range(100):
+            event = worker.poll()
+            if event is None:
+                break
+            kind, data = event
+            if kind == "connecting":
+                connection[0] = ConnectionState.CONNECTING
+            elif kind == "tcp_open":
+                connection[0] = ConnectionState.CONNECTED
+                radio_status.set("TCP connected; awaiting protobuf data")
+            elif kind == "protobuf":
+                verified[0] = True
+                count[0] += 1
+                counters.set(f"Decoded protobuf messages: {count[0]}")
+                radio_status.set(f"Received protobuf variant: {data.get('variant', 'unknown')}")
+            elif kind == "error":
+                verified[0] = False
+                connection[0] = ConnectionState.ERROR
+                radio_status.set(f"Radio error: {data}")
+            elif kind == "disconnected":
+                verified[0] = False
+                connection[0] = ConnectionState.DISCONNECTED
+                radio_status.set("Radio disconnected")
+            update_footer()
+        root.after(100, poll_radio)
+
+    def on_close():
+        worker.stop()
+        root.destroy()
+
+    root.protocol("WM_DELETE_WINDOW", on_close)
     footer = tk.Label(root, text=StatusSnapshot().footer,
                       bg="#15212A", fg="#FFFFFF", padx=20, pady=14, anchor="w")
     footer.pack(fill="x")
+    root.after(100, poll_radio)
     root.mainloop()
 
 
