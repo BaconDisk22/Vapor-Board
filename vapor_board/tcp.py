@@ -91,7 +91,7 @@ class ReceiveOnlyTcpClient:
         if sock is not None:
             try:
                 sock.shutdown(socket.SHUT_RDWR)
-            except OSError:
+            except (OSError, AttributeError):
                 pass
             try:
                 sock.close()
