@@ -46,6 +46,22 @@ class BulletinBoard:
             cursor = db.execute("INSERT INTO posts (board_id, author, body) VALUES (?, ?, ?)", (board_id, author, body))
             return cursor.lastrowid
 
+    def edit_post(self, post_id, body):
+        """Replace a post's body; the original author is kept."""
+        body = self._text(body, "post", 4000)
+        if type(post_id) is not int or post_id < 1:
+            raise ValueError("invalid post id")
+        with self._connect() as db:
+            if db.execute("UPDATE posts SET body = ? WHERE id = ?", (body, post_id)).rowcount != 1:
+                raise ValueError("post not found")
+
+    def delete_post(self, post_id):
+        if type(post_id) is not int or post_id < 1:
+            raise ValueError("invalid post id")
+        with self._connect() as db:
+            if db.execute("DELETE FROM posts WHERE id = ?", (post_id,)).rowcount != 1:
+                raise ValueError("post not found")
+
     def list_posts(self, board_id, limit=50):
         if type(board_id) is not int or board_id < 1:
             raise ValueError("invalid board id")

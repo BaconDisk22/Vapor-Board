@@ -18,7 +18,7 @@ def main():
     root = tk.Tk()
     root.title(f"{config.shop_name} — Desktop")
     root.geometry("760x520")
-    root.minsize(580, 380)
+    root.minsize(760, 520)  # smallest size where every Boards control is visible
     root.configure(bg="#15212A")
 
     header = tk.Frame(root, bg="#15212A", padx=24, pady=20)
@@ -45,23 +45,36 @@ def main():
     board_page = tabs.nametowidget(tabs.tabs()[1])
     for child in board_page.winfo_children():
         child.destroy()
-    ttk.Label(board_page, text="Local operator boards — local storage only").pack(anchor="w")
-    board_list = tk.Listbox(board_page, height=8, exportselection=False)
-    board_list.pack(fill="x", pady=6)
-    posts = tk.Text(board_page, height=10, wrap="word", state="disabled")
+    # Two columns so every control fits the default window: boards and posts
+    # to pick on the left, the post view and editor on the right.
+    board_column = ttk.Frame(board_page)
+    board_column.pack(side="left", fill="y", padx=(0, 12))
+    editor_column = ttk.Frame(board_page)
+    editor_column.pack(side="left", fill="both", expand=True)
+    ttk.Label(board_column, text="Local boards — local storage only").pack(anchor="w")
+    board_list = tk.Listbox(board_column, height=5, width=28, exportselection=False)
+    board_list.pack(fill="x", pady=4)
+    posts = tk.Text(editor_column, height=5, width=30, wrap="word", state="disabled")
     posts.pack(fill="both", expand=True)
     database = Path.home() / ".vapor-board" / "bbs.sqlite"
     selected_boards = []
+    shown_posts = []
 
     def show_posts(_event=None):
+        nonlocal shown_posts
         selection = board_list.curselection()
-        if not selection:
+        if not selection or selection[0] >= len(selected_boards):
             return
         try:
-            entries = BoardBrowser(database).posts(selected_boards[selection[0]]["id"])
-            content = "\n\n".join(f'{p["author"]}: {p["body"]}' for p in entries) or "No posts yet."
+            shown_posts = BoardBrowser(database).posts(selected_boards[selection[0]]["id"])
+            content = "\n\n".join(f'{p["author"]}: {p["body"]}' for p in shown_posts) or "No posts yet."
         except (OSError, ValueError, sqlite3.DatabaseError) as exc:
+            shown_posts = []
             content = f"Unable to read local posts: {exc}"
+        post_list.delete(0, "end")
+        for entry in shown_posts:
+            first_line = entry["body"].splitlines()[0] if entry["body"] else ""
+            post_list.insert("end", f'#{entry["id"]} {entry["author"]}: {first_line[:60]}')
         posts.configure(state="normal")
         posts.delete("1.0", "end")
         posts.insert("1.0", content)
@@ -79,10 +92,10 @@ def main():
             board_list.insert("end", f"Local database unavailable: {exc}")
 
     # Local operator actions only: do not expose these to network customers.
-    operator_controls = ttk.Frame(board_page)
-    operator_controls.pack(fill="x", pady=4)
+    operator_controls = ttk.Frame(board_column)
+    operator_controls.pack(fill="x")
     board_name = tk.StringVar()
-    ttk.Entry(operator_controls, textvariable=board_name).pack(side="left", fill="x", expand=True)
+    ttk.Entry(operator_controls, textvariable=board_name, width=12).pack(side="left", fill="x", expand=True)
 
     def create_local_board():
         try:
@@ -94,13 +107,16 @@ def main():
         board_name.set("")
         refresh_boards()
 
-    ttk.Button(operator_controls, text="Create local board", command=create_local_board).pack(side="left", padx=6)
+    ttk.Button(operator_controls, text="Create board", command=create_local_board).pack(side="left", padx=(6, 0))
+    ttk.Label(board_column, text="Select a post to edit or delete").pack(anchor="w", pady=(8, 0))
+    post_list = tk.Listbox(board_column, height=5, width=28, exportselection=False)
+    post_list.pack(fill="both", expand=True, pady=4)
 
-    ttk.Label(board_page, text="Local post author").pack(anchor="w")
+    ttk.Label(editor_column, text="Local post author").pack(anchor="w", pady=(6, 0))
     author_name = tk.StringVar(value="Operator")
-    ttk.Entry(board_page, textvariable=author_name).pack(fill="x")
-    ttk.Label(board_page, text="Post body (local database only)").pack(anchor="w")
-    post_editor = tk.Text(board_page, height=4, wrap="word")
+    ttk.Entry(editor_column, textvariable=author_name).pack(fill="x")
+    ttk.Label(editor_column, text="Post body (local database only)").pack(anchor="w")
+    post_editor = tk.Text(editor_column, height=4, width=30, wrap="word")
     post_editor.pack(fill="x")
 
     def save_local_post():
@@ -116,9 +132,53 @@ def main():
         post_editor.delete("1.0", "end")
         show_posts()
 
-    ttk.Button(board_page, text="Save local post", command=save_local_post).pack(anchor="w")
-    ttk.Button(board_page, text="Refresh local boards", command=refresh_boards).pack(anchor="w")
+    def selected_post():
+        selected = post_list.curselection()
+        if not selected or selected[0] >= len(shown_posts):
+            messagebox.showwarning("Select post", "Choose a post first.")
+            return None
+        return shown_posts[selected[0]]
+
+    def load_selected_post(_event=None):
+        selected = post_list.curselection()
+        if selected and selected[0] < len(shown_posts):
+            post_editor.delete("1.0", "end")
+            post_editor.insert("1.0", shown_posts[selected[0]]["body"])
+
+    def update_selected_post():
+        entry = selected_post()
+        if entry is None:
+            return
+        try:
+            BulletinBoard(database).edit_post(entry["id"], post_editor.get("1.0", "end-1c"))
+        except (ValueError, OSError, sqlite3.DatabaseError) as exc:
+            messagebox.showerror("Post not updated", str(exc))
+            return
+        post_editor.delete("1.0", "end")
+        show_posts()
+
+    def delete_selected_post():
+        entry = selected_post()
+        if entry is None:
+            return
+        if not messagebox.askyesno("Delete post", f'Delete post #{entry["id"]} by {entry["author"]}? This cannot be undone.'):
+            return
+        try:
+            BulletinBoard(database).delete_post(entry["id"])
+        except (ValueError, OSError, sqlite3.DatabaseError) as exc:
+            messagebox.showerror("Post not deleted", str(exc))
+            return
+        post_editor.delete("1.0", "end")
+        show_posts()
+
+    post_actions = ttk.Frame(editor_column)
+    post_actions.pack(fill="x", pady=(4, 0))
+    ttk.Button(post_actions, text="Save new post", command=save_local_post).pack(side="left")
+    ttk.Button(post_actions, text="Update post", command=update_selected_post).pack(side="left", padx=6)
+    ttk.Button(post_actions, text="Delete post", command=delete_selected_post).pack(side="left")
+    ttk.Button(board_column, text="Refresh boards", command=refresh_boards).pack(anchor="w")
     board_list.bind("<<ListboxSelect>>", show_posts)
+    post_list.bind("<<ListboxSelect>>", load_selected_post)
     refresh_boards()
 
     # Radio connections are explicit and receive-only.
