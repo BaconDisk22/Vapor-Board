@@ -83,14 +83,13 @@ class RadioWorker:
             self._generation += 1
             self._stop.set()
             session = self._session
+            while True:
+                try:
+                    self.events.get_nowait()
+                except Empty:
+                    break
         if session is not None:
             session.disconnect()
-        # Clear queued events from a cancelled session.
-        while True:
-            try:
-                self.events.get_nowait()
-            except Empty:
-                break
 
     def poll(self):
         try:
