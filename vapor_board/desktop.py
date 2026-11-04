@@ -9,6 +9,8 @@ from .tcp import TcpSettings, ConnectionState
 from .radio_worker import RadioWorker
 from .radio_event_state import RadioDisplayState, reduce_event
 from .board_browser import BoardBrowser
+from .bbs import BulletinBoard
+from tkinter import messagebox
 
 
 def main():
@@ -75,6 +77,24 @@ def main():
         except (OSError, ValueError, sqlite3.DatabaseError) as exc:
             selected_boards = []
             board_list.insert("end", f"Local database unavailable: {exc}")
+
+    # Local operator actions only: do not expose these to network customers.
+    operator_controls = ttk.Frame(board_page)
+    operator_controls.pack(fill="x", pady=4)
+    board_name = tk.StringVar()
+    ttk.Entry(operator_controls, textvariable=board_name).pack(side="left", fill="x", expand=True)
+
+    def create_local_board():
+        try:
+            database.parent.mkdir(parents=True, exist_ok=True)
+            BulletinBoard(database).create_board(board_name.get())
+        except (OSError, ValueError, sqlite3.DatabaseError) as exc:
+            messagebox.showerror("Board creation failed", str(exc))
+            return
+        board_name.set("")
+        refresh_boards()
+
+    ttk.Button(operator_controls, text="Create local board", command=create_local_board).pack(side="left", padx=6)
 
     ttk.Button(board_page, text="Refresh local boards", command=refresh_boards).pack(anchor="w")
     board_list.bind("<<ListboxSelect>>", show_posts)
