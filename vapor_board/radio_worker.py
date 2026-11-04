@@ -1,6 +1,6 @@
-"""Opt-in background receive worker; never touches Tk widgets directly."""
+"""Receive-only radio worker with cancellation-safe startup and event delivery."""
 from queue import Queue, Empty
-from threading import Event, Thread
+from threading import Event, Lock, Thread
 from .radio_session import RadioSession
 from .tcp import ConnectionState
 
@@ -8,53 +8,89 @@ class RadioWorker:
     def __init__(self, session_factory=None):
         self.session_factory = session_factory or RadioSession
         self.events = Queue()
+        self._lock = Lock()
         self._stop = Event()
         self._thread = None
         self._session = None
+        self._generation = 0
 
     def start(self, settings=None):
-        if self._thread is not None and self._thread.is_alive():
-            return False
-        self._stop.clear()
-        self._thread = Thread(target=self._run, args=(settings,), daemon=True)
-        self._thread.start()
-        return True
+        with self._lock:
+            if self._thread is not None and self._thread.is_alive():
+                return False
+            self._generation += 1
+            generation = self._generation
+            self._stop = Event()
+            stop = self._stop
+            self._thread = Thread(target=self._run, args=(settings, generation, stop), daemon=True)
+            self._thread.start()
+            return True
 
-    def _run(self, settings):
+    def _emit(self, generation, kind, data=None):
+        with self._lock:
+            if generation == self._generation:
+                self.events.put((kind, data))
+
+    def _run(self, settings, generation, stop):
         session = None
         try:
-            session = self.session_factory(settings=settings)
-            self._session = session
-            self.events.put(("connecting", None))
-            if not session.connect():
-                self.events.put(("error", "TCP connection failed"))
+            if stop.is_set():
                 return
-            self.events.put(("tcp_open", None))
-            while not self._stop.is_set():
+            session = self.session_factory(settings=settings)
+            with self._lock:
+                if stop.is_set() or generation != self._generation:
+                    return
+                self._session = session
+            self._emit(generation, "connecting")
+            if stop.is_set():
+                return
+            if not session.connect():
+                if not stop.is_set():
+                    self._emit(generation, "error", "TCP connection failed")
+                return
+            if stop.is_set():
+                return
+            self._emit(generation, "tcp_open")
+            while not stop.is_set():
                 try:
                     variants = session.receive()
-                except (TimeoutError, ConnectionError, OSError) as exc:
-                    self.events.put(("error", str(exc)))
-                    break
                 except Exception as exc:
-                    self.events.put(("error", str(exc)))
+                    if not stop.is_set():
+                        self._emit(generation, "error", str(exc))
+                    break
+                if stop.is_set():
                     break
                 for item in variants:
-                    self.events.put(("protobuf", item))
+                    if stop.is_set():
+                        break
+                    self._emit(generation, "protobuf", item)
                 if session.state != ConnectionState.CONNECTED:
                     break
+        except Exception as exc:
+            if not stop.is_set():
+                self._emit(generation, "error", str(exc))
         finally:
             if session is not None:
                 session.disconnect()
-            self._session = None
-            self.events.put(("disconnected", None))
+            with self._lock:
+                if self._session is session:
+                    self._session = None
+            if not stop.is_set():
+                self._emit(generation, "disconnected")
 
     def stop(self):
-        self._stop.set()
-        # Closing the underlying socket unblocks recv on supported platforms.
-        session = self._session
+        with self._lock:
+            self._generation += 1
+            self._stop.set()
+            session = self._session
         if session is not None:
             session.disconnect()
+        # Clear queued events from a cancelled session.
+        while True:
+            try:
+                self.events.get_nowait()
+            except Empty:
+                break
 
     def poll(self):
         try:
