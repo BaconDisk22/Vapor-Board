@@ -1,5 +1,6 @@
 """Receive-only TCP connectivity probe. Does not implement Meshtastic framing."""
 import socket
+from threading import Lock
 from dataclasses import dataclass
 from enum import Enum
 
@@ -37,19 +38,30 @@ class ReceiveOnlyTcpClient:
         self._socket = None
         self.state = ConnectionState.DISCONNECTED
         self.last_error = None
+        self._lock = Lock()
+        self._generation = 0
 
     def connect(self):
         self.disconnect()
-        self.state = ConnectionState.CONNECTING
+        with self._lock:
+            generation = self._generation
+            self.state = ConnectionState.CONNECTING
         try:
-            self._socket = self._socket_factory((self.settings.host, self.settings.port), self.settings.timeout)
+            sock = self._socket_factory((self.settings.host, self.settings.port), self.settings.timeout)
         except OSError as exc:
-            self.state = ConnectionState.ERROR
-            self.last_error = str(exc)
+            with self._lock:
+                if generation == self._generation:
+                    self.state = ConnectionState.ERROR
+                    self.last_error = str(exc)
             return False
-        self.state = ConnectionState.CONNECTED
-        self.last_error = None
-        return True
+        with self._lock:
+            if generation != self._generation:
+                sock.close()
+                return False
+            self._socket = sock
+            self.state = ConnectionState.CONNECTED
+            self.last_error = None
+            return True
 
     def receive(self, size=4096):
         if type(size) is not int or not 1 <= size <= 65536:
@@ -72,13 +84,19 @@ class ReceiveOnlyTcpClient:
         raise PermissionError("outbound TCP transmission is unavailable in receive-only client")
 
     def disconnect(self):
-        sock, self._socket = self._socket, None
+        with self._lock:
+            self._generation += 1
+            sock, self._socket = self._socket, None
+            self.state = ConnectionState.DISCONNECTED
         if sock is not None:
+            try:
+                sock.shutdown(socket.SHUT_RDWR)
+            except (OSError, AttributeError):
+                pass
             try:
                 sock.close()
             except OSError:
                 pass
-        self.state = ConnectionState.DISCONNECTED
 
     def __enter__(self):
         if not self.connect():
