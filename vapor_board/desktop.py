@@ -59,7 +59,7 @@ def main():
             return
         try:
             entries = BoardBrowser(database).posts(selected_boards[selection[0]]["id"])
-            content = "\\n\\n".join(f'{p["author"]}: {p["body"]}' for p in entries) or "No posts yet."
+            content = "\n\n".join(f'{p["author"]}: {p["body"]}' for p in entries) or "No posts yet."
         except (OSError, ValueError, sqlite3.DatabaseError) as exc:
             content = f"Unable to read local posts: {exc}"
         posts.configure(state="normal")
