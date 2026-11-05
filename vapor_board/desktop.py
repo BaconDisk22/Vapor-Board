@@ -10,52 +10,137 @@ from .radio_worker import RadioWorker
 from .radio_event_state import RadioDisplayState, reduce_event
 from .board_browser import BoardBrowser
 from .bbs import BulletinBoard
+from . import ui_theme as theme
 from tkinter import messagebox
+
+# Dot colour for each radio state in the sidebar and on the Overview card.
+STATE_COLORS = {
+    ConnectionState.DISCONNECTED: theme.MUTED,
+    ConnectionState.CONNECTING: theme.WARNING,
+    ConnectionState.CONNECTED: theme.SUCCESS,
+    ConnectionState.ERROR: theme.DANGER,
+}
 
 
 def main():
-    config = load_shop_config(Path.home() / ".vapor-board" / "shop.json")
+    config_path = Path.home() / ".vapor-board" / "shop.json"
+    config = load_shop_config(config_path)
+    accent = config.accent_color
     root = tk.Tk()
     root.title(f"{config.shop_name} — Desktop")
-    root.geometry("760x520")
-    root.minsize(760, 520)  # smallest size where every Boards control is visible
-    root.configure(bg="#15212A")
+    root.geometry("1040x680")
+    root.minsize(900, 600)  # smallest size where every Boards control is visible
+    fonts = theme.apply_theme(root, accent)
 
-    header = tk.Frame(root, bg="#15212A", padx=24, pady=20)
-    header.pack(fill="x")
-    tk.Label(header, text=config.shop_name, bg="#15212A", fg="#FFFFFF",
-             font=("Helvetica", 24, "bold")).pack(anchor="w")
-    tk.Label(header, text="LOCAL DESKTOP • RADIO CONNECTION IS OPT-IN",
-             bg="#15212A", fg="#B7D3D9", font=("Helvetica", 11)).pack(anchor="w", pady=(8, 0))
+    # Sidebar navigation on the left, the selected page on the right.
+    sidebar = ttk.Frame(root, style="Sidebar.TFrame", width=210)
+    sidebar.pack(side="left", fill="y")
+    sidebar.pack_propagate(False)
+    tk.Frame(root, bg=theme.BORDER, width=1).pack(side="left", fill="y")
+    main_area = ttk.Frame(root)
+    main_area.pack(side="left", fill="both", expand=True)
 
-    tabs = ttk.Notebook(root)
-    tabs.pack(fill="both", expand=True, padx=20, pady=12)
-    for title, message in (
-        ("Overview", "Connect to a Meshtastic radio explicitly from this tab."),
-        ("Boards", "Local bulletin boards"),
-        ("Messages", "Private messaging integration is not enabled in this preview."),
-        ("Customers", "Customer approvals require a trusted identity provider; not available here."),
-        ("Settings", "Settings are loaded from ~/.vapor-board/shop.json (read-only preview)."),
-    ):
-        page = ttk.Frame(tabs, padding=20)
-        tabs.add(page, text=title)
-        ttk.Label(page, text=message, wraplength=600).pack(anchor="w")
+    brand = ttk.Frame(sidebar, style="Sidebar.TFrame", padding=(18, 22, 18, 18))
+    brand.pack(fill="x")
+    tk.Frame(brand, bg=accent, width=28, height=4).pack(anchor="w", pady=(0, 10))
+    ttk.Label(brand, text=config.shop_name, style="Sidebar.Brand.TLabel", wraplength=170).pack(anchor="w")
+    ttk.Label(brand, text="LOCAL BULLETIN BOARD", style="Sidebar.Muted.TLabel").pack(anchor="w", pady=(2, 0))
+
+    # Every page sits in the same grid cell and the selected one is raised.
+    # Swapping with pack_forget/pack left grid-managed widgets unpainted on macOS Tk.
+    page_host = ttk.Frame(main_area)
+    page_host.rowconfigure(0, weight=1)
+    page_host.columnconfigure(0, weight=1)
+    pages = {}
+    nav_buttons = {}
+
+    def show_page(name):
+        for other, button in nav_buttons.items():
+            button.configure(style="NavActive.TButton" if other == name else "Nav.TButton")
+        pages[name].tkraise()
+
+    def add_page(name, title, subtitle):
+        page = ttk.Frame(page_host, padding=(28, 24, 28, 16))
+        page.grid(row=0, column=0, sticky="nsew")
+        ttk.Label(page, text=title, style="Title.TLabel").pack(anchor="w")
+        ttk.Label(page, text=subtitle, style="Muted.TLabel").pack(anchor="w", pady=(2, 18))
+        pages[name] = page
+        nav_buttons[name] = ttk.Button(sidebar, text=name, style="Nav.TButton", command=lambda: show_page(name))
+        nav_buttons[name].pack(fill="x")
+        return page
+
+    overview_page = add_page("Overview", "Overview", "Radio connection is opt-in and receive-only.")
+    board_page = add_page("Boards", "Boards", "Local bulletin boards — stored on this Mac only.")
+    messages_page = add_page("Messages", "Messages", "Private messages between staff and customers.")
+    customers_page = add_page("Customers", "Customers", "Customer approvals and age verification.")
+    settings_page = add_page("Settings", "Settings", f"Loaded from {config_path} (read-only).")
+
+    # Radio status pinned to the bottom of the sidebar.
+    sidebar_status = ttk.Frame(sidebar, style="Sidebar.TFrame", padding=(18, 14))
+    sidebar_status.pack(side="bottom", fill="x")
+    ttk.Label(sidebar_status, text="RADIO", style="Sidebar.Field.TLabel").pack(anchor="w")
+    status_row = ttk.Frame(sidebar_status, style="Sidebar.TFrame")
+    status_row.pack(anchor="w", pady=(4, 0))
+    sidebar_dot = tk.Label(status_row, text="●", bg=theme.SIDEBAR, fg=theme.MUTED, font=fonts["small"])
+    sidebar_dot.pack(side="left")
+    sidebar_radio = ttk.Label(status_row, text="Not connected", style="Sidebar.Muted.TLabel")
+    sidebar_radio.pack(side="left", padx=(4, 0))
+    ttk.Label(sidebar_status, text="Transmit disabled", style="Sidebar.Muted.TLabel").pack(anchor="w", pady=(2, 0))
+
+    def empty_state(page, heading, body):
+        inner = theme.card(page, fill="x")
+        ttk.Label(inner, text=heading, style="Card.Title.TLabel").pack(anchor="w")
+        ttk.Label(inner, text=body, style="Card.Muted.TLabel", wraplength=560, justify="left").pack(anchor="w", pady=(6, 0))
+
+    empty_state(messages_page, "Private messaging is not enabled yet",
+                "The inbox and message composer are on the roadmap. Messages will stay in the local database "
+                "and never go out over the radio.")
+    empty_state(customers_page, "Customer access is not available yet",
+                "Customer approvals and 21+ age verification need a trusted operator sign-in first. "
+                "Until then no customer can reach this board.")
+
+    settings_card = theme.card(settings_page, "Shop settings", "Edit shop.json and restart to change these.", fill="x")
+    settings_grid = ttk.Frame(settings_card, style="Card.TFrame")
+    settings_grid.pack(fill="x", pady=(14, 0))
+    for row, (label, value) in enumerate((
+        ("Shop name", config.shop_name),
+        ("Accent colour", config.accent_color),
+        ("Notices", "On" if config.notices_enabled else "Off"),
+        ("Radio transmit", "Enabled" if config.transmissions_enabled else "Disabled"),
+        ("MQTT", "Enabled" if config.mqtt_enabled else "Disabled"),
+        ("Customer approval", "Required" if config.customer_access_requires_approval else "Not required"),
+        ("Minimum customer age", str(config.minimum_customer_age)),
+    )):
+        ttk.Label(settings_grid, text=label, style="Card.Muted.TLabel").grid(row=row, column=0, sticky="w", pady=5)
+        ttk.Label(settings_grid, text=value, style="Card.TLabel").grid(row=row, column=1, sticky="w", padx=(32, 0), pady=5)
+    tk.Frame(settings_grid, bg=accent, width=14, height=14).grid(row=1, column=2, sticky="w", padx=(10, 0))
 
     # Trusted local operator view only. Do not expose this to remote customers.
-    board_page = tabs.nametowidget(tabs.tabs()[1])
-    for child in board_page.winfo_children():
-        child.destroy()
-    # Two columns so every control fits the default window: boards and posts
-    # to pick on the left, the post view and editor on the right.
-    board_column = ttk.Frame(board_page)
-    board_column.pack(side="left", fill="y", padx=(0, 12))
-    editor_column = ttk.Frame(board_page)
+    # Two columns: boards and posts to pick on the left, reading pane and editor on the right.
+    board_body = ttk.Frame(board_page)
+    board_body.pack(fill="both", expand=True)
+    board_column = ttk.Frame(board_body, width=290)
+    board_column.pack(side="left", fill="y", padx=(0, 16))
+    board_column.pack_propagate(False)
+    editor_column = ttk.Frame(board_body)
     editor_column.pack(side="left", fill="both", expand=True)
-    ttk.Label(board_column, text="Local boards — local storage only").pack(anchor="w")
-    board_list = tk.Listbox(board_column, height=5, width=28, exportselection=False)
-    board_list.pack(fill="x", pady=4)
-    posts = tk.Text(editor_column, height=5, width=30, wrap="word", state="disabled")
-    posts.pack(fill="both", expand=True)
+
+    boards_card = theme.card(board_column, "Boards", fill="x")
+    board_list = tk.Listbox(boards_card, height=5, exportselection=False)
+    theme.style_list(board_list, accent, fonts["body"])
+    board_list.pack(fill="x", pady=(10, 10))
+    posts_card = theme.card(board_column, "Posts", "Select one to edit or delete.", fill="both", expand=True, pady=(14, 0))
+    post_list = tk.Listbox(posts_card, height=5, exportselection=False)
+    theme.style_list(post_list, accent, fonts["body"])
+    post_list.pack(fill="both", expand=True, pady=(10, 0))
+
+    reading_card = theme.card(editor_column, "Board", fill="both", expand=True)
+    posts = tk.Text(reading_card, height=5, width=30, wrap="word", state="disabled")
+    theme.style_text(posts, accent, fonts["body"])
+    posts.tag_configure("author", foreground=theme.shade(accent, 1.35), font=fonts["label"])
+    posts.tag_configure("meta", foreground=theme.MUTED, font=fonts["small"])
+    posts.pack(fill="both", expand=True, pady=(10, 0))
+
     database = Path.home() / ".vapor-board" / "bbs.sqlite"
     selected_boards = []
     shown_posts = []
@@ -65,20 +150,27 @@ def main():
         selection = board_list.curselection()
         if not selection or selection[0] >= len(selected_boards):
             return
+        error = None
         try:
             shown_posts = BoardBrowser(database).posts(selected_boards[selection[0]]["id"])
-            content = "\n\n".join(f'{p["author"]}: {p["body"]}' for p in shown_posts) or "No posts yet."
         except (OSError, ValueError, sqlite3.DatabaseError) as exc:
             shown_posts = []
-            content = f"Unable to read local posts: {exc}"
+            error = f"Unable to read local posts: {exc}"
+        posts.configure(state="normal")
+        posts.delete("1.0", "end")
+        for index, entry in enumerate(shown_posts):
+            if index:
+                posts.insert("end", "\n\n")
+            posts.insert("end", entry["author"], "author")
+            posts.insert("end", f'  ·  #{entry["id"]}  ·  {entry["created_at"]}\n', "meta")
+            posts.insert("end", entry["body"])
+        if not shown_posts:
+            posts.insert("1.0", error or "No posts yet.", "meta")
+        posts.configure(state="disabled")
         post_list.delete(0, "end")
         for entry in shown_posts:
             first_line = entry["body"].splitlines()[0] if entry["body"] else ""
-            post_list.insert("end", f'#{entry["id"]} {entry["author"]}: {first_line[:60]}')
-        posts.configure(state="normal")
-        posts.delete("1.0", "end")
-        posts.insert("1.0", content)
-        posts.configure(state="disabled")
+            post_list.insert("end", f'{entry["author"]} — {first_line[:40]}')
 
     def refresh_boards():
         nonlocal selected_boards
@@ -90,9 +182,11 @@ def main():
         except (OSError, ValueError, sqlite3.DatabaseError) as exc:
             selected_boards = []
             board_list.insert("end", f"Local database unavailable: {exc}")
+        board_count.set(str(len(selected_boards)))
 
     # Local operator actions only: do not expose these to network customers.
-    operator_controls = ttk.Frame(board_column)
+    ttk.Label(boards_card, text="NEW BOARD", style="Card.Field.TLabel").pack(anchor="w", pady=(0, 4))
+    operator_controls = ttk.Frame(boards_card, style="Card.TFrame")
     operator_controls.pack(fill="x")
     board_name = tk.StringVar()
     ttk.Entry(operator_controls, textvariable=board_name, width=12).pack(side="left", fill="x", expand=True)
@@ -107,16 +201,16 @@ def main():
         board_name.set("")
         refresh_boards()
 
-    ttk.Button(operator_controls, text="Create board", command=create_local_board).pack(side="left", padx=(6, 0))
-    ttk.Label(board_column, text="Select a post to edit or delete").pack(anchor="w", pady=(8, 0))
-    post_list = tk.Listbox(board_column, height=5, width=28, exportselection=False)
-    post_list.pack(fill="both", expand=True, pady=4)
+    ttk.Button(operator_controls, text="Create board", style="Accent.TButton", command=create_local_board).pack(side="left", padx=(8, 0))
 
-    ttk.Label(editor_column, text="Local post author").pack(anchor="w", pady=(6, 0))
+    composer = theme.card(editor_column, "Compose", fill="x", pady=(14, 0))
+    author_row = ttk.Frame(composer, style="Card.TFrame")
+    author_row.pack(fill="x", pady=(10, 6))
+    ttk.Label(author_row, text="AUTHOR", style="Card.Field.TLabel").pack(side="left")
     author_name = tk.StringVar(value="Operator")
-    ttk.Entry(editor_column, textvariable=author_name).pack(fill="x")
-    ttk.Label(editor_column, text="Post body (local database only)").pack(anchor="w")
-    post_editor = tk.Text(editor_column, height=4, width=30, wrap="word")
+    ttk.Entry(author_row, textvariable=author_name).pack(side="left", fill="x", expand=True, padx=(12, 0))
+    post_editor = tk.Text(composer, height=4, width=30, wrap="word")
+    theme.style_text(post_editor, accent, fonts["body"])
     post_editor.pack(fill="x")
 
     def save_local_post():
@@ -171,32 +265,47 @@ def main():
         post_editor.delete("1.0", "end")
         show_posts()
 
-    post_actions = ttk.Frame(editor_column)
-    post_actions.pack(fill="x", pady=(4, 0))
-    ttk.Button(post_actions, text="Save new post", command=save_local_post).pack(side="left")
-    ttk.Button(post_actions, text="Update post", command=update_selected_post).pack(side="left", padx=6)
-    ttk.Button(post_actions, text="Delete post", command=delete_selected_post).pack(side="left")
-    ttk.Button(board_column, text="Refresh boards", command=refresh_boards).pack(anchor="w")
+    post_actions = ttk.Frame(composer, style="Card.TFrame")
+    post_actions.pack(fill="x", pady=(12, 0))
+    ttk.Button(post_actions, text="Save new post", style="Accent.TButton", command=save_local_post).pack(side="left")
+    ttk.Button(post_actions, text="Update post", command=update_selected_post).pack(side="left", padx=8)
+    ttk.Button(post_actions, text="Delete post", style="Danger.TButton", command=delete_selected_post).pack(side="right")
+    ttk.Button(boards_card, text="Refresh boards", command=refresh_boards).pack(anchor="w", pady=(10, 0))
     board_list.bind("<<ListboxSelect>>", show_posts)
     post_list.bind("<<ListboxSelect>>", load_selected_post)
-    refresh_boards()
 
     # Radio connections are explicit and receive-only.
-    radio_page = tabs.nametowidget(tabs.tabs()[0])
-    for child in radio_page.winfo_children():
-        child.destroy()
+    radio_page = overview_page
     worker = RadioWorker()
-    ttk.Label(radio_page, text="Meshtastic Wi-Fi/TCP — receive only").pack(anchor="w")
+    stats = ttk.Frame(radio_page)
+    stats.pack(fill="x", pady=(0, 14))
+    counters = tk.StringVar(value="0")
+    board_count = tk.StringVar(value="0")
+    for column, (label, variable, note) in enumerate((
+        ("DECODED MESSAGES", counters, "Meshtastic protobuf frames received"),
+        ("LOCAL BOARDS", board_count, "Stored in this Mac's database"),
+    )):
+        stat = theme.card(stats, side="left", fill="both", expand=True, padx=(0, 14) if column == 0 else 0)
+        ttk.Label(stat, text=label, style="Card.Field.TLabel").pack(anchor="w")
+        ttk.Label(stat, textvariable=variable, style="Card.Stat.TLabel").pack(anchor="w", pady=(4, 0))
+        ttk.Label(stat, text=note, style="Card.Muted.TLabel").pack(anchor="w")
+
+    radio_card = theme.card(radio_page, "Meshtastic Wi-Fi/TCP", "Receive only. Vapor Board never transmits.", fill="x")
+    fields = ttk.Frame(radio_card, style="Card.TFrame")
+    fields.pack(fill="x", pady=(14, 0))
     host_var = tk.StringVar(value="127.0.0.1")
     port_var = tk.StringVar(value="4403")
-    ttk.Label(radio_page, text="Radio IP / host").pack(anchor="w")
-    ttk.Entry(radio_page, textvariable=host_var).pack(fill="x")
-    ttk.Label(radio_page, text="TCP port").pack(anchor="w")
-    ttk.Entry(radio_page, textvariable=port_var).pack(fill="x")
+    ttk.Label(fields, text="RADIO IP / HOST", style="Card.Field.TLabel").grid(row=0, column=0, sticky="w")
+    ttk.Label(fields, text="TCP PORT", style="Card.Field.TLabel").grid(row=0, column=1, sticky="w", padx=(12, 0))
+    ttk.Entry(fields, textvariable=host_var).grid(row=1, column=0, sticky="ew", pady=(4, 0))
+    ttk.Entry(fields, textvariable=port_var, width=8).grid(row=1, column=1, sticky="w", padx=(12, 0), pady=(4, 0))
+    fields.columnconfigure(0, weight=1)
+    status_line = ttk.Frame(radio_card, style="Card.TFrame")
+    status_line.pack(fill="x", pady=(14, 0))
+    radio_dot = tk.Label(status_line, text="●", bg=theme.CARD, fg=theme.MUTED, font=fonts["body"])
+    radio_dot.pack(side="left")
     radio_status = tk.StringVar(value="Disconnected — no connection attempted")
-    ttk.Label(radio_page, textvariable=radio_status, wraplength=550).pack(anchor="w", pady=10)
-    counters = tk.StringVar(value="Decoded protobuf messages: 0")
-    ttk.Label(radio_page, textvariable=counters).pack(anchor="w")
+    ttk.Label(status_line, textvariable=radio_status, style="Card.TLabel", wraplength=520).pack(side="left", padx=(6, 0))
     display_state = [RadioDisplayState()]
 
     def connect_radio():
@@ -216,13 +325,18 @@ def main():
         radio_status.set("Disconnect requested")
         update_footer()
 
-    controls = ttk.Frame(radio_page)
-    controls.pack(anchor="w", pady=8)
-    ttk.Button(controls, text="Connect", command=connect_radio).pack(side="left", padx=(0, 8))
+    controls = ttk.Frame(radio_card, style="Card.TFrame")
+    controls.pack(anchor="w", pady=(14, 0))
+    ttk.Button(controls, text="Connect", style="Accent.TButton", command=connect_radio).pack(side="left", padx=(0, 8))
     ttk.Button(controls, text="Disconnect", command=disconnect_radio).pack(side="left")
 
     def update_footer():
-        footer.configure(text=StatusSnapshot(tcp_state=display_state[0].tcp, protocol_verified=display_state[0].protocol_verified).footer)
+        snapshot = StatusSnapshot(tcp_state=display_state[0].tcp, protocol_verified=display_state[0].protocol_verified)
+        footer.configure(text=snapshot.footer)
+        color = STATE_COLORS[display_state[0].tcp]
+        sidebar_dot.configure(fg=color)
+        radio_dot.configure(fg=color)
+        sidebar_radio.configure(text=snapshot.radio_label)
 
     def poll_radio():
         if not root.winfo_exists():
@@ -233,7 +347,7 @@ def main():
                 break
             kind, data = event
             display_state[0] = reduce_event(display_state[0], event)
-            counters.set(f"Decoded protobuf messages: {display_state[0].decoded}")
+            counters.set(str(display_state[0].decoded))
             radio_status.set(display_state[0].detail)
             update_footer()
         root.after(100, poll_radio)
@@ -243,9 +357,13 @@ def main():
         root.destroy()
 
     root.protocol("WM_DELETE_WINDOW", on_close)
-    footer = tk.Label(root, text=StatusSnapshot().footer,
-                      bg="#15212A", fg="#FFFFFF", padx=20, pady=14, anchor="w")
-    footer.pack(fill="x")
+    footer = tk.Label(main_area, text=StatusSnapshot().footer, bg=theme.BACKGROUND, fg=theme.MUTED,
+                      font=fonts["small"], padx=28, pady=8, anchor="w")
+    footer.pack(side="bottom", fill="x")
+    tk.Frame(main_area, bg=theme.BORDER, height=1).pack(side="bottom", fill="x")
+    page_host.pack(fill="both", expand=True)
+    refresh_boards()
+    show_page("Overview")
     root.after(100, poll_radio)
     root.mainloop()
 
