@@ -32,8 +32,7 @@ class DesktopPostActionsUiTests(unittest.TestCase):
             try:
                 root.attributes("-alpha", 0.0)  # invisible: nothing flashes on the operator's screen
                 root.geometry("+4000+4000")
-                notebook = next(w for w in _walk(root) if w.winfo_class() == "TNotebook")
-                notebook.select(1)  # open the Boards tab, as the operator would
+                self.buttons(root)["Boards"].invoke()  # open Boards from the sidebar, as the operator would
                 root.update()  # map it so <<ListboxSelect>> bindings fire
                 scenario(root)
             finally:
@@ -48,12 +47,14 @@ class DesktopPostActionsUiTests(unittest.TestCase):
             desktop.main()
 
     @staticmethod
-    def widgets(root):
+    def buttons(root):
+        return {w.cget("text"): w for w in _walk(root) if w.winfo_class() == "TButton"}
+
+    def widgets(self, root):
         widgets = list(_walk(root))
         board_list, post_list = [w for w in widgets if isinstance(w, tk.Listbox)]
         view, editor = [w for w in widgets if isinstance(w, tk.Text)]
-        buttons = {w.cget("text"): w for w in widgets if w.winfo_class() == "TButton"}
-        return board_list, post_list, view, editor, buttons
+        return board_list, post_list, view, editor, self.buttons(root)
 
     def test_save_edit_and_delete_through_the_window(self):
         def scenario(root):
@@ -70,8 +71,9 @@ class DesktopPostActionsUiTests(unittest.TestCase):
             editor.insert("1.0", "First post\n\nfrom the desktop")
             buttons["Save new post"].invoke()
             self.assertEqual(editor.get("1.0", "end-1c"), "")
-            self.assertEqual(view.get("1.0", "end-1c"), "Operator: First post\n\nfrom the desktop")
-            self.assertTrue(post_list.get(0).endswith("Operator: First post"))
+            self.assertTrue(view.get("1.0", "end-1c").startswith("Operator  ·  #1  ·  "))
+            self.assertTrue(view.get("1.0", "end-1c").endswith("\nFirst post\n\nfrom the desktop"))
+            self.assertEqual(post_list.get(0), "Operator — First post")
 
             post_list.selection_set(0)
             post_list.event_generate("<<ListboxSelect>>")
@@ -80,7 +82,7 @@ class DesktopPostActionsUiTests(unittest.TestCase):
             editor.delete("1.0", "end")
             editor.insert("1.0", "Edited post")
             buttons["Update post"].invoke()
-            self.assertEqual(view.get("1.0", "end-1c"), "Operator: Edited post")
+            self.assertTrue(view.get("1.0", "end-1c").endswith("\nEdited post"))
 
             post_list.selection_set(0)
             with mock.patch.object(desktop.messagebox, "askyesno", return_value=False) as ask:
@@ -97,9 +99,28 @@ class DesktopPostActionsUiTests(unittest.TestCase):
 
         self.run_desktop(scenario)
 
+    def test_two_posts_are_separated_by_a_blank_line(self):
+        board = BulletinBoard(self.database)
+        board.post(self.board_id, "Operator", "Older")
+        board.post(self.board_id, "Staff", "Newer")
+
+        def scenario(root):
+            board_list, _post_list, view, _editor, _buttons = self.widgets(root)
+            board_list.selection_set(0)
+            board_list.event_generate("<<ListboxSelect>>")
+            root.update()
+            lines = view.get("1.0", "end-1c").split("\n")
+            self.assertEqual([lines[0].split("  ·  ")[0], lines[1], lines[2], lines[3].split("  ·  ")[0], lines[4]],
+                             ["Staff", "Newer", "", "Operator", "Older"])
+
+        self.run_desktop(scenario)
+
     def test_every_boards_control_fits_the_default_window(self):
         def scenario(root):
-            page = next(w for w in _walk(root) if w.winfo_class() == "TNotebook").nametowidget(root.nametowidget(".!notebook").select())
+            board_list = next(w for w in _walk(root) if isinstance(w, tk.Listbox))
+            page = board_list
+            while page.master.master.master is not root:  # climb to the Boards page frame
+                page = page.master
             bottom = page.winfo_rooty() + page.winfo_height()
             right = page.winfo_rootx() + page.winfo_width()
             for widget in _walk(page):
