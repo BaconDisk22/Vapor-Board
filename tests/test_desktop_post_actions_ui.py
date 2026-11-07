@@ -1,57 +1,18 @@
-"""Drives the real Tk boards tab; skipped where no display is available."""
-import tempfile
+"""Drives the real Tk Boards page; skipped where no display is available."""
 import tkinter as tk
-import unittest
-from pathlib import Path
 from unittest import mock
+from desktop_harness import DesktopHarness, walk as _walk
 from vapor_board import desktop
 from vapor_board.bbs import BulletinBoard
 
 
-def _walk(widget):
-    yield widget
-    for child in widget.winfo_children():
-        yield from _walk(child)
-
-
-class DesktopPostActionsUiTests(unittest.TestCase):
+class DesktopPostActionsUiTests(DesktopHarness):
     def setUp(self):
-        try:
-            tk.Tk().destroy()
-        except tk.TclError as exc:
-            self.skipTest(f"no display: {exc}")
-        self.directory = tempfile.TemporaryDirectory()
-        self.addCleanup(self.directory.cleanup)
-        self.home = Path(self.directory.name)
-        (self.home / ".vapor-board").mkdir()
-        self.database = self.home / ".vapor-board" / "bbs.sqlite"
+        super().setUp()
         self.board_id = BulletinBoard(self.database).create_board("General")
 
-    def run_desktop(self, scenario):
-        def mainloop(root, *_args):
-            try:
-                root.attributes("-alpha", 0.0)  # invisible: nothing flashes on the operator's screen
-                root.geometry("+4000+4000")
-                self.buttons(root)["Boards"].invoke()  # open Boards from the sidebar, as the operator would
-                root.update()  # map it so <<ListboxSelect>> bindings fire
-                scenario(root)
-            finally:
-                for pending in root.tk.call("after", "info"):
-                    root.after_cancel(pending)
-                root.destroy()
-        # Keep the window off-screen and fail on any dialog a scenario did not mock.
-        unexpected = mock.Mock(side_effect=AssertionError("unexpected dialog"))
-        with mock.patch.object(Path, "home", return_value=self.home), \
-                mock.patch.object(tk.Tk, "mainloop", mainloop), \
-                mock.patch.multiple(desktop.messagebox, showwarning=unexpected, showerror=unexpected, askyesno=unexpected):
-            desktop.main()
-
-    @staticmethod
-    def buttons(root):
-        return {w.cget("text"): w for w in _walk(root) if w.winfo_class() == "TButton"}
-
     def widgets(self, root):
-        widgets = list(_walk(root))
+        widgets = list(_walk(self.page(root, "Boards")))
         board_list, post_list = [w for w in widgets if isinstance(w, tk.Listbox)]
         view, editor = [w for w in widgets if isinstance(w, tk.Text)]
         return board_list, post_list, view, editor, self.buttons(root)
@@ -116,22 +77,7 @@ class DesktopPostActionsUiTests(unittest.TestCase):
         self.run_desktop(scenario)
 
     def test_every_boards_control_fits_the_default_window(self):
-        def scenario(root):
-            board_list = next(w for w in _walk(root) if isinstance(w, tk.Listbox))
-            page = board_list
-            while page.master.master.master is not root:  # climb to the Boards page frame
-                page = page.master
-            bottom = page.winfo_rooty() + page.winfo_height()
-            right = page.winfo_rootx() + page.winfo_width()
-            for widget in _walk(page):
-                if widget is page or widget.winfo_class() == "TFrame":
-                    continue
-                with self.subTest(widget=str(widget)):
-                    self.assertTrue(widget.winfo_ismapped(), "hidden by lack of space")
-                    self.assertLessEqual(widget.winfo_rooty() + widget.winfo_height(), bottom)
-                    self.assertLessEqual(widget.winfo_rootx() + widget.winfo_width(), right)
-
-        self.run_desktop(scenario)
+        self.run_desktop(lambda root: self.assert_page_fits(root, "Boards"))
 
     def test_empty_edit_is_refused_and_post_kept(self):
         BulletinBoard(self.database).post(self.board_id, "Operator", "Keep me")
@@ -152,4 +98,5 @@ class DesktopPostActionsUiTests(unittest.TestCase):
 
 
 if __name__ == "__main__":
+    import unittest
     unittest.main()
