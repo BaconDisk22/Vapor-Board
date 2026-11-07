@@ -67,6 +67,18 @@ class AuthorizedBBS:
         self._require(principal)
         return self._board.inbox(principal.identity, limit)
 
+    def sent(self, principal, limit=50):
+        self._require(principal)
+        return self._board.sent(principal.identity, limit)
+
+    def unread_count(self, principal):
+        self._require(principal)
+        return self._board.unread_count(principal.identity)
+
+    def mark_read(self, principal, mail_id):
+        self._require(principal)
+        return self._board.mark_read(principal.identity, mail_id)
+
     def command(self, principal, command):
         self._require(principal)
         return self._board.command(principal.identity, command)

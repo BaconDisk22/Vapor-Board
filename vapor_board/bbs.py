@@ -19,7 +19,10 @@ class BulletinBoard:
         with self._connect() as db:
             db.execute("CREATE TABLE IF NOT EXISTS boards (id INTEGER PRIMARY KEY, name TEXT NOT NULL UNIQUE)")
             db.execute("CREATE TABLE IF NOT EXISTS posts (id INTEGER PRIMARY KEY, board_id INTEGER NOT NULL REFERENCES boards(id), author TEXT NOT NULL, body TEXT NOT NULL, created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP)")
-            db.execute("CREATE TABLE IF NOT EXISTS mail (id INTEGER PRIMARY KEY, sender TEXT NOT NULL, recipient TEXT NOT NULL, body TEXT NOT NULL, created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP)")
+            db.execute("CREATE TABLE IF NOT EXISTS mail (id INTEGER PRIMARY KEY, sender TEXT NOT NULL, recipient TEXT NOT NULL, body TEXT NOT NULL, created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP, read_at TEXT)")
+            # Databases created before read tracking lack read_at; add it in place.
+            if "read_at" not in {row["name"] for row in db.execute("PRAGMA table_info(mail)")}:
+                db.execute("ALTER TABLE mail ADD COLUMN read_at TEXT")
 
     @staticmethod
     def _text(value, field, limit):
@@ -83,7 +86,29 @@ class BulletinBoard:
         if type(limit) is not int or not 1 <= limit <= 100:
             raise ValueError("limit must be 1–100")
         with self._connect() as db:
-            return [dict(row) for row in db.execute("SELECT id, sender, recipient, body, created_at FROM mail WHERE recipient = ? ORDER BY id DESC LIMIT ?", (recipient, limit))]
+            return [dict(row) for row in db.execute("SELECT id, sender, recipient, body, created_at, read_at FROM mail WHERE recipient = ? ORDER BY id DESC LIMIT ?", (recipient, limit))]
+
+    def sent(self, sender, limit=50):
+        sender = self._text(sender, "sender", 80)
+        if type(limit) is not int or not 1 <= limit <= 100:
+            raise ValueError("limit must be 1–100")
+        with self._connect() as db:
+            return [dict(row) for row in db.execute("SELECT id, sender, recipient, body, created_at, read_at FROM mail WHERE sender = ? ORDER BY id DESC LIMIT ?", (sender, limit))]
+
+    def unread_count(self, recipient):
+        recipient = self._text(recipient, "recipient", 80)
+        with self._connect() as db:
+            return db.execute("SELECT COUNT(*) FROM mail WHERE recipient = ? AND read_at IS NULL", (recipient,)).fetchone()[0]
+
+    def mark_read(self, recipient, mail_id):
+        """Mark one of recipient's own messages read; marking twice is harmless."""
+        recipient = self._text(recipient, "recipient", 80)
+        if type(mail_id) is not int or mail_id < 1:
+            raise ValueError("invalid message id")
+        with self._connect() as db:
+            if db.execute("SELECT 1 FROM mail WHERE id = ? AND recipient = ?", (mail_id, recipient)).fetchone() is None:
+                raise ValueError("message not found")
+            db.execute("UPDATE mail SET read_at = CURRENT_TIMESTAMP WHERE id = ? AND read_at IS NULL", (mail_id,))
 
     def command(self, user, command):
         """Read-only commands only; writes require explicit application authorization."""

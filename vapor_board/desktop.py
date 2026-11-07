@@ -53,11 +53,14 @@ def main():
     page_host.columnconfigure(0, weight=1)
     pages = {}
     nav_buttons = {}
+    on_show = {}  # page name -> refresh to run each time the page opens
 
     def show_page(name):
         for other, button in nav_buttons.items():
             button.configure(style="NavActive.TButton" if other == name else "Nav.TButton")
         pages[name].tkraise()
+        if name in on_show:
+            on_show[name]()
 
     def add_page(name, title, subtitle):
         page = ttk.Frame(page_host, padding=(28, 24, 28, 16))
@@ -71,7 +74,8 @@ def main():
 
     overview_page = add_page("Overview", "Overview", "Radio connection is opt-in and receive-only.")
     board_page = add_page("Boards", "Boards", "Local bulletin boards — stored on this Mac only.")
-    messages_page = add_page("Messages", "Messages", "Private messages between staff and customers.")
+    messages_page = add_page("Messages", "Messages",
+                             f"Private messages for {config.operator_name.strip()} — stored on this Mac, never sent over the radio.")
     customers_page = add_page("Customers", "Customers", "Customer approvals and age verification.")
     settings_page = add_page("Settings", "Settings", f"Loaded from {config_path} (read-only).")
 
@@ -92,9 +96,6 @@ def main():
         ttk.Label(inner, text=heading, style="Card.Title.TLabel").pack(anchor="w")
         ttk.Label(inner, text=body, style="Card.Muted.TLabel", wraplength=560, justify="left").pack(anchor="w", pady=(6, 0))
 
-    empty_state(messages_page, "Private messaging is not enabled yet",
-                "The inbox and message composer are on the roadmap. Messages will stay in the local database "
-                "and never go out over the radio.")
     empty_state(customers_page, "Customer access is not available yet",
                 "Customer approvals and 21+ age verification need a trusted operator sign-in first. "
                 "Until then no customer can reach this board.")
@@ -104,6 +105,7 @@ def main():
     settings_grid.pack(fill="x", pady=(14, 0))
     for row, (label, value) in enumerate((
         ("Shop name", config.shop_name),
+        ("Operator mailbox", config.operator_name.strip()),
         ("Accent colour", config.accent_color),
         ("Notices", "On" if config.notices_enabled else "Off"),
         ("Radio transmit", "Enabled" if config.transmissions_enabled else "Disabled"),
@@ -113,7 +115,7 @@ def main():
     )):
         ttk.Label(settings_grid, text=label, style="Card.Muted.TLabel").grid(row=row, column=0, sticky="w", pady=5)
         ttk.Label(settings_grid, text=value, style="Card.TLabel").grid(row=row, column=1, sticky="w", padx=(32, 0), pady=5)
-    tk.Frame(settings_grid, bg=accent, width=14, height=14).grid(row=1, column=2, sticky="w", padx=(10, 0))
+    tk.Frame(settings_grid, bg=accent, width=14, height=14).grid(row=2, column=2, sticky="w", padx=(10, 0))
 
     # Trusted local operator view only. Do not expose this to remote customers.
     # Two columns: boards and posts to pick on the left, reading pane and editor on the right.
@@ -274,6 +276,138 @@ def main():
     board_list.bind("<<ListboxSelect>>", show_posts)
     post_list.bind("<<ListboxSelect>>", load_selected_post)
 
+    # Private messages for the operator mailbox named in shop.json. Until operator
+    # sign-in exists (Phase 5) the sender is fixed to that mailbox, never typed in.
+    mailbox = config.operator_name.strip()
+    mail_view = ["inbox"]
+    shown_mail = []
+    unread_count = tk.StringVar(value="0")
+
+    mail_body = ttk.Frame(messages_page)
+    mail_body.pack(fill="both", expand=True)
+    mail_column = ttk.Frame(mail_body, width=290)
+    mail_column.pack(side="left", fill="y", padx=(0, 16))
+    mail_column.pack_propagate(False)
+    mail_reader_column = ttk.Frame(mail_body)
+    mail_reader_column.pack(side="left", fill="both", expand=True)
+
+    mail_card = theme.card(mail_column, fill="both", expand=True)
+    mail_tabs = ttk.Frame(mail_card, style="Card.TFrame")
+    mail_tabs.pack(fill="x")
+    mail_list = tk.Listbox(mail_card, height=8, exportselection=False)
+    theme.style_list(mail_list, accent, fonts["body"])
+    mail_list.pack(fill="both", expand=True, pady=(12, 10))
+
+    reader_card = theme.card(mail_reader_column, fill="both", expand=True)
+    reader = tk.Text(reader_card, height=5, width=30, wrap="word", state="disabled")
+    theme.style_text(reader, accent, fonts["body"])
+    reader.tag_configure("author", foreground=theme.shade(accent, 1.35), font=fonts["label"])
+    reader.tag_configure("meta", foreground=theme.MUTED, font=fonts["small"])
+    reader.pack(fill="both", expand=True)
+
+    def show_in_reader(entry=None, note="Select a message to read it."):
+        reader.configure(state="normal")
+        reader.delete("1.0", "end")
+        if entry is None:
+            reader.insert("1.0", note, "meta")
+        else:
+            other = entry["sender"] if mail_view[0] == "inbox" else entry["recipient"]
+            reader.insert("end", ("From " if mail_view[0] == "inbox" else "To ") + other, "author")
+            reader.insert("end", f'  ·  {entry["created_at"]}\n', "meta")
+            reader.insert("end", entry["body"])
+        reader.configure(state="disabled")
+
+    def refresh_mail():
+        nonlocal shown_mail
+        mail_list.delete(0, "end")
+        if not database.exists():  # nothing written yet; don't create the database just to read it
+            shown_mail, unread = [], 0
+        else:
+            try:
+                bbs = BulletinBoard(database)
+                shown_mail = bbs.inbox(mailbox) if mail_view[0] == "inbox" else bbs.sent(mailbox)
+                unread = bbs.unread_count(mailbox)
+            except (OSError, ValueError, sqlite3.DatabaseError) as exc:
+                shown_mail, unread = [], 0
+                show_in_reader(note=f"Unable to read local messages: {exc}")
+        for entry in shown_mail:
+            first_line = entry["body"].splitlines()[0] if entry["body"] else ""
+            if mail_view[0] == "inbox":
+                marker = "●  " if entry["read_at"] is None else "    "
+                mail_list.insert("end", f'{marker}{entry["sender"]} — {first_line[:32]}')
+            else:
+                mail_list.insert("end", f'To {entry["recipient"]} — {first_line[:32]}')
+        unread_count.set(str(unread))
+        nav_buttons["Messages"].configure(text=f"Messages  ({unread})" if unread else "Messages")
+        inbox_tab.configure(text=f"Inbox ({unread})" if unread else "Inbox")
+        if not shown_mail:
+            show_in_reader(note="No messages yet." if mail_view[0] == "inbox" else "Nothing sent yet.")
+
+    def switch_mail_view(view):
+        mail_view[0] = view
+        inbox_tab.configure(style="Accent.TButton" if view == "inbox" else "TButton")
+        sent_tab.configure(style="Accent.TButton" if view == "sent" else "TButton")
+        show_in_reader()
+        refresh_mail()
+
+    def open_message(_event=None):
+        selected = mail_list.curselection()
+        if not selected or selected[0] >= len(shown_mail):
+            return
+        entry = shown_mail[selected[0]]
+        show_in_reader(entry)
+        if mail_view[0] == "inbox" and entry["read_at"] is None:
+            try:
+                BulletinBoard(database).mark_read(mailbox, entry["id"])
+            except (OSError, ValueError, sqlite3.DatabaseError) as exc:
+                messagebox.showerror("Message not marked read", str(exc))
+                return
+            refresh_mail()
+            mail_list.selection_set(selected[0])
+
+    inbox_tab = ttk.Button(mail_tabs, text="Inbox", style="Accent.TButton", command=lambda: switch_mail_view("inbox"))
+    inbox_tab.pack(side="left")
+    sent_tab = ttk.Button(mail_tabs, text="Sent", command=lambda: switch_mail_view("sent"))
+    sent_tab.pack(side="left", padx=(8, 0))
+    ttk.Button(mail_card, text="Refresh messages", command=refresh_mail).pack(anchor="w")
+    mail_list.bind("<<ListboxSelect>>", open_message)
+
+    mail_composer = theme.card(mail_reader_column, "New message", fill="x", pady=(14, 0))
+    to_row = ttk.Frame(mail_composer, style="Card.TFrame")
+    to_row.pack(fill="x", pady=(10, 6))
+    ttk.Label(to_row, text="TO", style="Card.Field.TLabel", width=6).pack(side="left")
+    recipient_name = tk.StringVar()
+    ttk.Entry(to_row, textvariable=recipient_name).pack(side="left", fill="x", expand=True)
+    ttk.Label(mail_composer, text=f"Sending as {mailbox}", style="Card.Muted.TLabel").pack(anchor="w", pady=(0, 6))
+    mail_editor = tk.Text(mail_composer, height=4, width=30, wrap="word")
+    theme.style_text(mail_editor, accent, fonts["body"])
+    mail_editor.pack(fill="x")
+
+    def send_message():
+        try:
+            database.parent.mkdir(parents=True, exist_ok=True)
+            BulletinBoard(database).send_mail(mailbox, recipient_name.get(), mail_editor.get("1.0", "end-1c"))
+        except (OSError, ValueError, sqlite3.DatabaseError) as exc:
+            messagebox.showerror("Message not sent", str(exc))
+            return
+        recipient_name.set("")
+        mail_editor.delete("1.0", "end")
+        switch_mail_view("sent")
+
+    def reply_to_message():
+        selected = mail_list.curselection()
+        if mail_view[0] != "inbox" or not selected or selected[0] >= len(shown_mail):
+            messagebox.showwarning("Select message", "Choose a message in your inbox first.")
+            return
+        recipient_name.set(shown_mail[selected[0]]["sender"])
+        mail_editor.focus_set()
+
+    mail_actions = ttk.Frame(mail_composer, style="Card.TFrame")
+    mail_actions.pack(fill="x", pady=(12, 0))
+    ttk.Button(mail_actions, text="Send message", style="Accent.TButton", command=send_message).pack(side="left")
+    ttk.Button(mail_actions, text="Reply", command=reply_to_message).pack(side="left", padx=8)
+    on_show["Messages"] = refresh_mail
+
     # Radio connections are explicit and receive-only.
     radio_page = overview_page
     worker = RadioWorker()
@@ -284,8 +418,9 @@ def main():
     for column, (label, variable, note) in enumerate((
         ("DECODED MESSAGES", counters, "Meshtastic protobuf frames received"),
         ("LOCAL BOARDS", board_count, "Stored in this Mac's database"),
+        ("UNREAD MESSAGES", unread_count, f"In the {mailbox} mailbox"),
     )):
-        stat = theme.card(stats, side="left", fill="both", expand=True, padx=(0, 14) if column == 0 else 0)
+        stat = theme.card(stats, side="left", fill="both", expand=True, padx=(0, 14) if column < 2 else 0)
         ttk.Label(stat, text=label, style="Card.Field.TLabel").pack(anchor="w")
         ttk.Label(stat, textvariable=variable, style="Card.Stat.TLabel").pack(anchor="w", pady=(4, 0))
         ttk.Label(stat, text=note, style="Card.Muted.TLabel").pack(anchor="w")
@@ -363,6 +498,7 @@ def main():
     tk.Frame(main_area, bg=theme.BORDER, height=1).pack(side="bottom", fill="x")
     page_host.pack(fill="both", expand=True)
     refresh_boards()
+    refresh_mail()
     show_page("Overview")
     root.after(100, poll_radio)
     root.mainloop()

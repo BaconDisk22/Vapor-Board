@@ -11,6 +11,8 @@ _HEX = re.compile(r"^#[0-9a-fA-F]{6}$")
 @dataclass(frozen=True)
 class ShopConfig:
     shop_name: str = "Vapor Board"
+    # Mailbox the desktop reads and sends as until operator sign-in exists.
+    operator_name: str = "Operator"
     accent_color: str = "#238C9C"
     notices_enabled: bool = True
     transmissions_enabled: bool = False
@@ -21,6 +23,8 @@ class ShopConfig:
     def __post_init__(self):
         if not isinstance(self.shop_name, str) or not (1 <= len(self.shop_name.strip()) <= 80):
             raise ValueError("shop_name must contain 1–80 characters")
+        if not isinstance(self.operator_name, str) or not (1 <= len(self.operator_name.strip()) <= 80):
+            raise ValueError("operator_name must contain 1–80 characters")
         if not isinstance(self.accent_color, str) or not _HEX.fullmatch(self.accent_color):
             raise ValueError("accent_color must be a six-digit hex color")
         for key in ("notices_enabled", "transmissions_enabled", "mqtt_enabled", "customer_access_requires_approval"):
