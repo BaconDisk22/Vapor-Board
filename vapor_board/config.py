@@ -6,6 +6,8 @@ import json
 import re
 
 _HEX = re.compile(r"^#[0-9a-fA-F]{6}$")
+APPEARANCES = ("system", "light", "dark")
+TEXT_SIZES = ("standard", "large", "larger")
 
 
 @dataclass(frozen=True)
@@ -19,6 +21,9 @@ class ShopConfig:
     mqtt_enabled: bool = False
     customer_access_requires_approval: bool = True
     minimum_customer_age: int = 21
+    # Desktop look: "system" follows macOS light/dark; text_size scales every font.
+    appearance: str = "system"
+    text_size: str = "standard"
 
     def __post_init__(self):
         if not isinstance(self.shop_name, str) or not (1 <= len(self.shop_name.strip()) <= 80):
@@ -32,6 +37,10 @@ class ShopConfig:
                 raise ValueError(f"{key} must be a boolean")
         if type(self.minimum_customer_age) is not int or self.minimum_customer_age < 21:
             raise ValueError("minimum_customer_age must be at least 21")
+        if self.appearance not in APPEARANCES:
+            raise ValueError(f"appearance must be one of: {', '.join(APPEARANCES)}")
+        if self.text_size not in TEXT_SIZES:
+            raise ValueError(f"text_size must be one of: {', '.join(TEXT_SIZES)}")
 
     def to_dict(self):
         return asdict(self)
