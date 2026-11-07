@@ -30,8 +30,8 @@ class DesktopSearchUiTests(DesktopHarness):
             self.search(root, "holiday")
             self.assertEqual(self.labels(self.page(root, "Search"))[1], "2 results for “holiday”  ·  1 post, 1 message")
             results = self.lists(root, "Search")[0]
-            self.assertEqual(self.rows(results), ("✉  Sam — Are you open on the holiday?",
-                                                  "▤  Hours  ·  Operator — Closed Monday for the holiday"))
+            self.assertEqual(self.rows(results), ("✉  Sam — Are you open on the holid…",
+                                                  "▤  Hours  ·  Operator — Closed Monday for the hol…"))
             open_button = self.buttons(root, "Search")["Open"]
             self.assertFalse(self.enabled(open_button))
             self.pick(root, results, 1)
