@@ -110,6 +110,52 @@ class BulletinBoard:
                 raise ValueError("message not found")
             db.execute("UPDATE mail SET read_at = CURRENT_TIMESTAMP WHERE id = ? AND read_at IS NULL", (mail_id,))
 
+    def conversations(self, user, limit=50):
+        """One row per person user has written to or heard from, most recent first.
+
+        Each row: other, last_body, last_at, last_from_user (bool), unread (messages from
+        other that user hasn't read), total.
+        """
+        user = self._text(user, "user", 80)
+        if type(limit) is not int or not 1 <= limit <= 100:
+            raise ValueError("limit must be 1–100")
+        query = """
+            SELECT other, COUNT(*) AS total,
+                   SUM(CASE WHEN recipient = :user AND read_at IS NULL THEN 1 ELSE 0 END) AS unread,
+                   MAX(id) AS last_id
+            FROM (SELECT id, recipient, read_at,
+                         CASE WHEN sender = :user THEN recipient ELSE sender END AS other
+                  FROM mail WHERE sender = :user OR recipient = :user)
+            GROUP BY other ORDER BY last_id DESC LIMIT :limit"""
+        with self._connect() as db:
+            rows = []
+            for row in db.execute(query, {"user": user, "limit": limit}).fetchall():
+                last = db.execute("SELECT sender, body, created_at FROM mail WHERE id = ?", (row["last_id"],)).fetchone()
+                rows.append({"other": row["other"], "last_body": last["body"], "last_at": last["created_at"],
+                             "last_from_user": last["sender"] == user, "unread": row["unread"], "total": row["total"]})
+            return rows
+
+    def conversation(self, user, other, limit=100):
+        """The latest messages between user and other, oldest first (read top to bottom)."""
+        user = self._text(user, "user", 80)
+        other = self._text(other, "other person", 80)
+        if type(limit) is not int or not 1 <= limit <= 200:
+            raise ValueError("limit must be 1–200")
+        with self._connect() as db:
+            rows = [dict(row) for row in db.execute(
+                "SELECT id, sender, recipient, body, created_at, read_at FROM mail "
+                "WHERE (sender = ? AND recipient = ?) OR (sender = ? AND recipient = ?) ORDER BY id DESC LIMIT ?",
+                (user, other, other, user, limit))]
+        return rows[::-1]
+
+    def mark_conversation_read(self, user, other):
+        """Mark everything other sent to user as read; returns how many changed."""
+        user = self._text(user, "user", 80)
+        other = self._text(other, "other person", 80)
+        with self._connect() as db:
+            return db.execute("UPDATE mail SET read_at = CURRENT_TIMESTAMP WHERE recipient = ? AND sender = ? AND read_at IS NULL",
+                              (user, other)).rowcount
+
     def command(self, user, command):
         """Read-only commands only; writes require explicit application authorization."""
         user = self._text(user, "user", 80)

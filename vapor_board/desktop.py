@@ -448,7 +448,8 @@ def main():
     # ==== Messages =========================================================================
     # Private messages for the operator mailbox named in shop.json. Until operator
     # sign-in exists (Phase 5) the sender is fixed to that mailbox, never typed in.
-    mail_view = ["inbox"]
+    mail_view = ["threads"]  # threads (one row per person) | inbox | sent
+    EMPTY_MAIL = {"threads": "No conversations yet", "inbox": "No messages yet", "sent": "Nothing sent yet"}
     mail_body = ttk.Frame(messages_page)
     mail_body.pack(fill="both", expand=True)
     mail_body.columnconfigure(1, weight=1)
@@ -469,20 +470,31 @@ def main():
     _holder, reader = theme.text_area(reader_card.body, t, height=5, readonly=True)
     _holder.pack(fill="both", expand=True)
 
-    def show_in_reader(entry=None, note="Select a message to read it."):
+    def show_in_reader(entry=None, note="Select a message to read it.", thread=None):
         reader.configure(state="normal")
         reader.delete("1.0", "end")
         if entry is None:
-            reader_card.title_var.set("No message selected" if shown_mail else ("Inbox is empty" if mail_view[0] == "inbox" else "Nothing sent yet"))
+            empty = {"threads": "No conversations yet", "inbox": "Inbox is empty", "sent": "Nothing sent yet"}[mail_view[0]]
+            reader_card.title_var.set(("No conversation selected" if mail_view[0] == "threads" else "No message selected") if shown_mail else empty)
             reader_card.subtitle_var.set("Messages stay on this Mac.")
             reader.insert("1.0", note, "placeholder")
+        elif thread is not None:
+            reader_card.title_var.set(f'Conversation with {entry["other"]}')
+            reader_card.subtitle_var.set(f'{plural(len(thread), "message")}  ·  last {friendly_time(entry["last_at"])}')
+            for number, message in enumerate(thread):
+                if number:
+                    reader.insert("end", "\n\n")
+                reader.insert("end", "You" if message["sender"] == mailbox else message["sender"], "author")
+                reader.insert("end", f'  ·  {friendly_time(message["created_at"])}\n', "meta")
+                reader.insert("end", message["body"])
+            reader.see("end")  # newest at the bottom, as in any chat
         else:
             incoming = mail_view[0] == "inbox"
             reader_card.title_var.set(("From " if incoming else "To ") + (entry["sender"] if incoming else entry["recipient"]))
             reader_card.subtitle_var.set(("Received " if incoming else "Sent ") + friendly_time(entry["created_at"]))
             reader.insert("end", entry["body"])
         reader.configure(state="disabled")
-        reply_button.state(["!disabled"] if entry is not None and mail_view[0] == "inbox" else ["disabled"])
+        reply_button.state(["!disabled"] if entry is not None and mail_view[0] != "sent" else ["disabled"])
 
     def refresh_mail():
         nonlocal shown_mail
@@ -492,19 +504,24 @@ def main():
         else:
             try:
                 bbs = BulletinBoard(database)
-                shown_mail = bbs.inbox(mailbox) if mail_view[0] == "inbox" else bbs.sent(mailbox)
+                shown_mail = {"threads": bbs.conversations, "inbox": bbs.inbox, "sent": bbs.sent}[mail_view[0]](mailbox)
                 unread = bbs.unread_count(mailbox)
                 has_mail[0] = has_mail[0] or bool(shown_mail)
             except DATA_ERRORS as exc:
                 shown_mail, unread, error = [], 0, f"Couldn't read messages: {exc}"
         rows = []
         for entry in shown_mail:
-            if mail_view[0] == "inbox":
+            if mail_view[0] == "threads":
+                fresh = entry["unread"] > 0
+                count = f' ({entry["unread"]})' if fresh else ""
+                preview = ("You: " if entry["last_from_user"] else "") + first_line(entry["last_body"], 26)
+                rows.append((f'{"●  " if fresh else "    "}{entry["other"]}{count} — {preview}', ("strong",) if fresh else ()))
+            elif mail_view[0] == "inbox":
                 fresh = entry["read_at"] is None
                 rows.append((f'{"●  " if fresh else "    "}{entry["sender"]} — {first_line(entry["body"], 32)}', ("strong",) if fresh else ()))
             else:
                 rows.append((f'To {entry["recipient"]} — {first_line(entry["body"], 32)}', ()))
-        mail_list.set_rows(rows, placeholder=error or ("No messages yet" if mail_view[0] == "inbox" else "Nothing sent yet"),
+        mail_list.set_rows(rows, placeholder=error or EMPTY_MAIL[mail_view[0]],
                            tag="error" if error else "placeholder")
         unread_count.set(str(unread))
         if unread:
@@ -514,19 +531,40 @@ def main():
             messages_badge.place_forget()
         inbox_tab.configure(text=f"Inbox  {unread}" if unread else "Inbox")
         if not shown_mail:
-            show_in_reader(note=error or ("No messages yet." if mail_view[0] == "inbox" else "Nothing sent yet."))
+            show_in_reader(note=error or EMPTY_MAIL[mail_view[0]] + ".")
         elif mail_list.selected() is None:
             show_in_reader()  # nothing chosen yet: prompt to pick a message; Reply waits for one
 
     def switch_mail_view(view):
         mail_view[0] = view
-        inbox_tab.configure(style="SegmentActive.TButton" if view == "inbox" else "Segment.TButton")
-        sent_tab.configure(style="SegmentActive.TButton" if view == "sent" else "Segment.TButton")
+        for name, tab in mail_tabs_by_view.items():
+            tab.configure(style="SegmentActive.TButton" if view == name else "Segment.TButton")
         refresh_mail()
         show_in_reader()
 
+    def open_thread(index):
+        other = shown_mail[index]["other"]
+        try:
+            bbs = BulletinBoard(database)
+            if shown_mail[index]["unread"]:
+                bbs.mark_conversation_read(mailbox, other)
+            thread = bbs.conversation(mailbox, other)
+        except DATA_ERRORS as exc:
+            notify("danger", "Couldn't open the conversation", str(exc))
+            return
+        if shown_mail[index]["unread"]:
+            refresh_mail()
+            index = next((i for i, row in enumerate(shown_mail) if row["other"] == other), None)
+            if index is None:
+                return
+            mail_list.select(index)
+        show_in_reader(shown_mail[index], thread=thread)
+
     def open_message(index):
         if index >= len(shown_mail):
+            return
+        if mail_view[0] == "threads":
+            open_thread(index)
             return
         entry = shown_mail[index]
         show_in_reader(entry)
@@ -541,10 +579,13 @@ def main():
             show_in_reader(shown_mail[index] if index < len(shown_mail) else None)
 
     mail_list.on_select = open_message
-    inbox_tab = ttk.Button(mail_tabs, text="Inbox", style="SegmentActive.TButton", command=lambda: switch_mail_view("inbox"))
-    inbox_tab.pack(side="left", fill="x", expand=True)
-    sent_tab = ttk.Button(mail_tabs, text="Sent", style="Segment.TButton", command=lambda: switch_mail_view("sent"))
-    sent_tab.pack(side="left", fill="x", expand=True)
+    mail_tabs_by_view = {}
+    for view, label in (("threads", "Threads"), ("inbox", "Inbox"), ("sent", "Sent")):
+        tab = ttk.Button(mail_tabs, text=label, style="SegmentActive.TButton" if view == mail_view[0] else "Segment.TButton",
+                         command=lambda view=view: switch_mail_view(view))
+        tab.pack(side="left", fill="x", expand=True)
+        mail_tabs_by_view[view] = tab
+    inbox_tab = mail_tabs_by_view["inbox"]
     ttk.Button(mail_card.body, text="Refresh", style="Link.TButton", command=refresh_mail).pack(anchor="w", pady=(t.px(SM), 0))
 
     mail_composer = theme.Card(mail_reader_column, t, "New message", f"From {mailbox}. Messages never leave this Mac.").pack(fill="x", pady=(t.px(LG), 0))
@@ -570,15 +611,22 @@ def main():
         mail_editor.delete("1.0", "end")
         mail_composer.title_var.set("New message")
         has_mail[0] = True
-        switch_mail_view("sent")
+        if mail_view[0] == "threads":  # stay in the conversation and show the new message in it
+            refresh_mail()
+            index = next((i for i, row in enumerate(shown_mail) if row["other"] == recipient), None)
+            if index is not None:
+                mail_list.select(index)
+                open_thread(index)
+        else:
+            switch_mail_view("sent")
         notify("success", "Message sent", f"Delivered to {recipient}'s inbox on this Mac.")
         return "break"
 
     def reply_to_message():
         index = mail_list.selected()
-        if mail_view[0] != "inbox" or index is None or index >= len(shown_mail):
+        if mail_view[0] == "sent" or index is None or index >= len(shown_mail):
             return
-        sender = shown_mail[index]["sender"]
+        sender = shown_mail[index]["other" if mail_view[0] == "threads" else "sender"]
         recipient_name.set(sender)
         mail_composer.title_var.set(f"Reply to {sender}")
         mail_editor.focus_set()
