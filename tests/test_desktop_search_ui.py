@@ -22,7 +22,7 @@ class DesktopSearchUiTests(DesktopHarness):
         entry = self.search_entry(root)
         entry.delete(0, "end")
         entry.insert(0, text)
-        entry.event_generate("<Return>")
+        entry.submit()  # the entry's Return binding
         root.update()
 
     def test_search_lists_posts_and_own_messages(self):

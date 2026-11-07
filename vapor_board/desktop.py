@@ -1179,6 +1179,7 @@ def main():
     result_list.tree.bind("<Return>", open_result)
     result_list.tree.bind("<Double-1>", open_result)
     search_entry.bind("<Return>", run_search)
+    search_entry.submit = run_search  # what Return does; tests call it since synthetic keys need window focus
     search_entry.bind("<Escape>", lambda _e: (search_text.set(""), "break")[1])
     search_entry.bind("<Down>", lambda _e: (result_list.tree.focus_set(), "break")[1] if found and current[0] == "Search" else None)
 
