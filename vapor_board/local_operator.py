@@ -5,6 +5,10 @@ import sqlite3
 from pathlib import Path
 
 
+def _columns(db, table):
+    return {row[1] for row in db.execute(f"PRAGMA table_info({table})")}
+
+
 def inspect_database(path, board_id=None):
     path = Path(path).resolve()
     if not path.is_file():
@@ -14,9 +18,16 @@ def inspect_database(path, board_id=None):
     with sqlite3.connect(path.as_uri() + "?mode=ro", uri=True) as db:
         db.row_factory = sqlite3.Row
         if board_id is None:
-            rows = db.execute("SELECT id, name FROM boards ORDER BY id").fetchall()
+            # Read-only, so a database from an older version can't be upgraded here: order by what exists.
+            order = "position, id" if "position" in _columns(db, "boards") else "id"
+            rows = db.execute(f"SELECT id, name FROM boards ORDER BY {order}").fetchall()
             return {"boards": [dict(row) for row in rows]}
-        rows = db.execute("SELECT id, board_id, author, body, created_at FROM posts WHERE board_id = ? ORDER BY id DESC LIMIT 50", (board_id,)).fetchall()
+        if "pinned_at" in _columns(db, "posts"):
+            query = ("SELECT id, board_id, author, body, created_at, pinned_at FROM posts WHERE board_id = ? "
+                     "ORDER BY pinned_at IS NULL, pinned_at DESC, id DESC LIMIT 50")
+        else:
+            query = "SELECT id, board_id, author, body, created_at, NULL AS pinned_at FROM posts WHERE board_id = ? ORDER BY id DESC LIMIT 50"
+        rows = db.execute(query, (board_id,)).fetchall()
         return {"posts": [dict(row) for row in rows]}
 
 
