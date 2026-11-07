@@ -651,7 +651,11 @@ def main():
             else:
                 ttk.Label(grid, text=value, style="Card.Strong.TLabel", wraplength=t.px(200), justify="right").grid(row=row, column=1, sticky="e")
             row += 1
-            if note:
+            if isinstance(note, tk.StringVar):
+                ttk.Label(grid, textvariable=note, style="Card.Caption.TLabel", wraplength=t.px(330), justify="left").grid(
+                    row=row, column=0, columnspan=2, sticky="w", pady=(2, 0))
+                row += 1
+            elif note:
                 ttk.Label(grid, text=note, style="Card.Caption.TLabel", wraplength=t.px(330), justify="left").grid(
                     row=row, column=0, columnspan=2, sticky="w", pady=(2, 0))
                 row += 1
@@ -673,13 +677,14 @@ def main():
     def refresh_storage():
         database_state.set("Found" if database.exists() else "Not created yet")
         latest = next((b for b in backups.list_backups(backup_folder) if not b.label), None)
-        last_backup.set(friendly_time(latest.created.astimezone(timezone.utc).strftime("%Y-%m-%d %H:%M:%S")) if latest else "None yet")
+        when = friendly_time(latest.created.astimezone(timezone.utc).strftime("%Y-%m-%d %H:%M:%S")) if latest else "none yet"
+        last_backup.set(f"{short_path(database)}  ·  Last backup: {when}")
         backup_now.state(["!disabled"] if database.exists() else ["disabled"])
 
-    storage = settings_card(left_settings, "Storage", (
+    # Backup buttons live in the page header: the left column has no spare height at 900x600.
+    settings_card(left_settings, "Storage", (
         ("Settings file", "Found" if config_path.exists() else "Not created (defaults)", short_path(config_path)),
-        ("Database", database_state, short_path(database)),
-        ("Last backup", last_backup, f"Backups are copies kept in {short_path(backup_folder)}. Nothing leaves this Mac."),
+        ("Database", database_state, last_backup),
     ), pady=(t.px(LG), 0))
 
     def back_up_now():
@@ -689,7 +694,7 @@ def main():
             notify("danger", "Backup not made", str(exc))
             return
         refresh_storage()
-        notify("success", "Backup saved", f"{made.summary} copied to {made.path.name}.")
+        notify("success", "Backup saved", f"{made.summary} copied to {short_path(made.path)}.")
 
     def restore_from_backup():
         chosen = filedialog.askopenfilename(
@@ -721,9 +726,9 @@ def main():
         notify("success", "Backup restored",
                f"{info.summary} restored." + (f" Previous data saved as {safety.path.name}." if safety else ""))
 
-    backup_now = ttk.Button(storage.actions, text="Back up now", command=back_up_now)
+    backup_now = ttk.Button(settings_actions, text="Back up now", command=back_up_now)
     backup_now.pack(side="left")
-    ttk.Button(storage.actions, text="Restore…", style="Ghost.TButton", command=restore_from_backup).pack(side="left", padx=(t.px(SM), 0))
+    ttk.Button(settings_actions, text="Restore…", command=restore_from_backup).pack(side="left", padx=(t.px(SM), 0))
     refresh_storage()
     settings_card(right_settings, "Radio & network", (
         ("Radio transmit", ("success", "On") if config.transmissions_enabled else ("neutral", "Off"),
@@ -749,7 +754,7 @@ def main():
             notify("danger", "Couldn't open Finder", str(exc))
 
     if sys.platform == "darwin":
-        ttk.Button(settings_actions, text="Show in Finder", command=reveal_settings).pack()
+        ttk.Button(settings_actions, text="Show in Finder", command=reveal_settings).pack(side="left", padx=(t.px(SM), 0))
 
     # ==== Overview =========================================================================
     # Radio connections are explicit and receive-only.

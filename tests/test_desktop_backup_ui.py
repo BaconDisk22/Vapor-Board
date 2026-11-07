@@ -14,16 +14,15 @@ class DesktopBackupUiTests(DesktopHarness):
         self.folder = self.home / ".vapor-board" / "backups"
 
     def last_backup(self, root):
-        labels = self.labels(self.page(root, "Settings"))
-        # textvariable labels report their text through cget too
-        return labels[labels.index("Last backup") + 1]
+        note = next(text for text in self.labels(self.page(root, "Settings")) if "Last backup: " in text)
+        return note.split("Last backup: ")[1]
 
     def test_back_up_now_saves_a_copy_and_says_so(self):
         def scenario(root):
-            self.assertEqual(self.last_backup(root), "None yet")
+            self.assertEqual(self.last_backup(root), "none yet")
             self.buttons(root, "Settings")["Back up now"].invoke()
             root.update()
-            self.assertTrue(self.toast(root).startswith("Backup saved: 1 board, 0 posts, 0 messages copied to bbs-"))
+            self.assertTrue(self.toast(root).startswith("Backup saved: 1 board, 0 posts, 0 messages copied to ~/.vapor-board/backups/bbs-"))
             self.assertTrue(self.last_backup(root).startswith("Today "))
             self.assert_page_fits(root, "Settings")
 

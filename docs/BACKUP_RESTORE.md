@@ -1,6 +1,6 @@
 # Database backup and restore
 
-Settings → Storage has **Back up now** and **Restore…**. Code: `vapor_board/backup.py`.
+The Settings page header has **Back up now** and **Restore…**; the Storage card shows when the last backup was made. Code: `vapor_board/backup.py`.
 
 ## Back up
 - Copies `~/.vapor-board/bbs.sqlite` to `~/.vapor-board/backups/bbs-YYYYMMDD-HHMMSS.sqlite`.
