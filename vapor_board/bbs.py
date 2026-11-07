@@ -21,8 +21,18 @@ class BulletinBoard:
             db.execute("CREATE TABLE IF NOT EXISTS posts (id INTEGER PRIMARY KEY, board_id INTEGER NOT NULL REFERENCES boards(id), author TEXT NOT NULL, body TEXT NOT NULL, created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP)")
             db.execute("CREATE TABLE IF NOT EXISTS mail (id INTEGER PRIMARY KEY, sender TEXT NOT NULL, recipient TEXT NOT NULL, body TEXT NOT NULL, created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP, read_at TEXT)")
             # Databases created before read tracking lack read_at; add it in place.
-            if "read_at" not in {row["name"] for row in db.execute("PRAGMA table_info(mail)")}:
+            if "read_at" not in self._columns(db, "mail"):
                 db.execute("ALTER TABLE mail ADD COLUMN read_at TEXT")
+            # Board order and pinned posts arrived later too; existing boards keep their creation order.
+            if "position" not in self._columns(db, "boards"):
+                db.execute("ALTER TABLE boards ADD COLUMN position INTEGER")
+            db.execute("UPDATE boards SET position = id WHERE position IS NULL")
+            if "pinned_at" not in self._columns(db, "posts"):
+                db.execute("ALTER TABLE posts ADD COLUMN pinned_at TEXT")
+
+    @staticmethod
+    def _columns(db, table):
+        return {row["name"] for row in db.execute(f"PRAGMA table_info({table})")}
 
     @staticmethod
     def _text(value, field, limit):
@@ -33,12 +43,31 @@ class BulletinBoard:
     def create_board(self, name):
         name = self._text(name, "board name", 80)
         with self._connect() as db:
-            cursor = db.execute("INSERT INTO boards (name) VALUES (?)", (name,))
+            cursor = db.execute("INSERT INTO boards (name, position) VALUES (?, (SELECT COALESCE(MAX(position), 0) + 1 FROM boards))", (name,))
             return cursor.lastrowid
 
     def list_boards(self):
+        """Boards in the operator's chosen order (creation order until moved)."""
         with self._connect() as db:
-            return [dict(row) for row in db.execute("SELECT id, name FROM boards ORDER BY id")]
+            return [dict(row) for row in db.execute("SELECT id, name FROM boards ORDER BY position, id")]
+
+    def move_board(self, board_id, offset):
+        """Move a board one place up (-1) or down (+1). Returns False when it is already at that end."""
+        if type(board_id) is not int or board_id < 1:
+            raise ValueError("invalid board id")
+        if offset not in (-1, 1):
+            raise ValueError("offset must be -1 or 1")
+        with self._connect() as db:
+            order = [row["id"] for row in db.execute("SELECT id FROM boards ORDER BY position, id")]
+            if board_id not in order:
+                raise ValueError("board not found")
+            index = order.index(board_id)
+            target = index + offset
+            if not 0 <= target < len(order):
+                return False
+            order[index], order[target] = order[target], order[index]
+            db.executemany("UPDATE boards SET position = ? WHERE id = ?", [(n, i) for n, i in enumerate(order, start=1)])
+            return True
 
     def post(self, board_id, author, body):
         author = self._text(author, "author", 80)
@@ -65,13 +94,26 @@ class BulletinBoard:
             if db.execute("DELETE FROM posts WHERE id = ?", (post_id,)).rowcount != 1:
                 raise ValueError("post not found")
 
+    def pin_post(self, post_id, pinned=True):
+        """Pin a post to the top of its board, or unpin it. Pinning twice keeps the first pin time."""
+        if type(post_id) is not int or post_id < 1:
+            raise ValueError("invalid post id")
+        with self._connect() as db:
+            if db.execute("SELECT 1 FROM posts WHERE id = ?", (post_id,)).fetchone() is None:
+                raise ValueError("post not found")
+            if pinned:
+                db.execute("UPDATE posts SET pinned_at = CURRENT_TIMESTAMP WHERE id = ? AND pinned_at IS NULL", (post_id,))
+            else:
+                db.execute("UPDATE posts SET pinned_at = NULL WHERE id = ?", (post_id,))
+
     def list_posts(self, board_id, limit=50):
         if type(board_id) is not int or board_id < 1:
             raise ValueError("invalid board id")
         if type(limit) is not int or not 1 <= limit <= 100:
             raise ValueError("limit must be 1–100")
         with self._connect() as db:
-            return [dict(row) for row in db.execute("SELECT id, board_id, author, body, created_at FROM posts WHERE board_id = ? ORDER BY id DESC LIMIT ?", (board_id, limit))]
+            return [dict(row) for row in db.execute("SELECT id, board_id, author, body, created_at, pinned_at FROM posts WHERE board_id = ? "
+                "ORDER BY pinned_at IS NULL, pinned_at DESC, id DESC LIMIT ?", (board_id, limit))]
 
     def send_mail(self, sender, recipient, body):
         sender = self._text(sender, "sender", 80)

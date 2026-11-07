@@ -238,9 +238,16 @@ def main():
         publish_button.state(["!disabled"] if board else ["disabled"])
 
     def update_post_actions():
-        chosen = post_list.selected() is not None
-        for button in (edit_button, delete_button):
-            button.state(["!disabled"] if chosen else ["disabled"])
+        entry = selected_post()
+        for button in (pin_button, edit_button, delete_button):
+            button.state(["!disabled"] if entry is not None else ["disabled"])
+        pin_button.configure(text="Unpin" if entry is not None and entry.get("pinned_at") else "Pin")
+
+    def update_board_actions():
+        index = board_list.selected()
+        last = len(selected_boards) - 1
+        up_button.state(["!disabled"] if index is not None and 0 < index <= last else ["disabled"])
+        down_button.state(["!disabled"] if index is not None and index < last else ["disabled"])
 
     def show_posts(_event=None, keep=None):
         nonlocal shown_posts
@@ -254,7 +261,8 @@ def main():
             shown_posts = []
             error = f"Couldn't read posts: {exc}"
         reading_card.title_var.set(board["name"])
-        reading_card.subtitle_var.set(plural(len(shown_posts), "post") + " · newest first" if shown_posts else "No posts yet")
+        order = " · pinned first, then newest" if any(entry.get("pinned_at") for entry in shown_posts) else " · newest first"
+        reading_card.subtitle_var.set(plural(len(shown_posts), "post") + order if shown_posts else "No posts yet")
         posts_card.subtitle_var.set(plural(len(shown_posts), "post") if shown_posts else "Nothing posted yet")
         posts.configure(state="normal")
         posts.delete("1.0", "end")
@@ -263,14 +271,16 @@ def main():
                 posts.insert("end", "\n\n")
             start = posts.index("end-1c")
             posts.insert("end", entry["author"], "author")
-            posts.insert("end", f'  ·  #{entry["id"]}  ·  {friendly_time(entry["created_at"])}\n', "meta")
+            pinned = "  ·  Pinned" if entry.get("pinned_at") else ""
+            posts.insert("end", f'  ·  #{entry["id"]}  ·  {friendly_time(entry["created_at"])}{pinned}\n', "meta")
             posts.insert("end", entry["body"])
             posts.mark_set(f"post{index}", start)
             posts.mark_gravity(f"post{index}", "left")
         if not shown_posts:
             posts.insert("1.0", error or "No posts yet.", "placeholder")
         posts.configure(state="disabled")
-        post_list.set_rows([(f'{entry["author"]} — {first_line(entry["body"], 40)}', ()) for entry in shown_posts],
+        post_list.set_rows([(f'{"◆  " if entry.get("pinned_at") else ""}{entry["author"]} — {first_line(entry["body"], 40)}', ())
+                            for entry in shown_posts],
                            placeholder=error or "No posts yet")
         if keep is not None:
             index = next((i for i, entry in enumerate(shown_posts) if entry["id"] == keep), None)
@@ -309,7 +319,8 @@ def main():
         if index is not None:
             board_list.select(index)
             show_posts()
-        else:
+        update_board_actions()
+        if index is None:
             reading_card.title_var.set("No boards yet")
             reading_card.subtitle_var.set("Create a board on the left to start posting notices.")
             post_list.set_rows([], placeholder="No posts yet")
@@ -335,6 +346,34 @@ def main():
         post_editor.focus_set()
 
     ttk.Button(operator_controls, text="Add board", command=create_local_board).pack(side="left", padx=(t.px(SM), 0))
+
+    def move_selected_board(offset):
+        board = current_board()
+        if board is None:
+            return "break"
+        try:
+            moved = BulletinBoard(database).move_board(board["id"], offset)
+        except DATA_ERRORS as exc:
+            notify("danger", "Board not moved", str(exc))
+            return "break"
+        if moved:
+            refresh_boards(keep=board["id"])
+        return "break"
+
+    def toggle_pin(_event=None):
+        entry = selected_post()
+        board = current_board()
+        if entry is None or board is None:
+            return
+        pin = not entry.get("pinned_at")
+        try:
+            BulletinBoard(database).pin_post(entry["id"], pin)
+        except DATA_ERRORS as exc:
+            notify("danger", "Post not pinned" if pin else "Post not unpinned", str(exc))
+            return
+        show_posts(keep=entry["id"])
+        notify("success", "Post pinned" if pin else "Post unpinned",
+               f'It stays at the top of {board["name"]}.' if pin else "It's back in date order.")
     board_entry.bind("<Return>", lambda _e: create_local_board())
 
     def save_local_post():
@@ -417,11 +456,24 @@ def main():
         update_selected_post() if editing[0] is not None else save_local_post()
         return "break"
 
+    pin_button = ttk.Button(reading_card.actions, text="Pin", command=toggle_pin)
+    pin_button.pack(side="left")
     edit_button = ttk.Button(reading_card.actions, text="Edit", command=edit_selected_post)
-    edit_button.pack(side="left")
+    edit_button.pack(side="left", padx=(t.px(SM), 0))
     delete_button = ttk.Button(reading_card.actions, text="Delete", style="Danger.TButton", command=delete_selected_post)
     delete_button.pack(side="left", padx=(t.px(SM), 0))
-    ttk.Button(boards_card.actions, text="Refresh", style="Ghost.TButton", command=refresh_boards).pack()
+    # Move the chosen board up or down the list (also Option-↑ / Option-↓ in the list).
+    up_button = ttk.Button(boards_card.actions, text="↑", style="Ghost.TButton", command=lambda: move_selected_board(-1))
+    up_button.pack(side="left")
+    down_button = ttk.Button(boards_card.actions, text="↓", style="Ghost.TButton", command=lambda: move_selected_board(1))
+    down_button.pack(side="left")
+    ttk.Button(boards_card.actions, text="Refresh", style="Ghost.TButton", command=refresh_boards).pack(side="left", padx=(t.px(XS), 0))
+    for modifier in ("Option", "Alt"):
+        try:
+            board_list.tree.bind(f"<{modifier}-Up>", lambda _e: move_selected_board(-1))
+            board_list.tree.bind(f"<{modifier}-Down>", lambda _e: move_selected_board(1))
+        except tk.TclError:  # "Option" only exists on macOS
+            pass
 
     post_actions = ttk.Frame(composer.body, style="Card.TFrame")
     post_actions.pack(fill="x", pady=(t.px(MD), 0))
@@ -430,7 +482,7 @@ def main():
     cancel_button = ttk.Button(post_actions, text="Cancel", style="Ghost.TButton", command=cancel_edit)
     cancel_button.pack(side="right", padx=(0, t.px(SM)))
     ttk.Label(post_actions, textvariable=composer_hint, style="Card.Caption.TLabel").pack(side="left")
-    board_list.on_select = lambda _index: show_posts()
+    board_list.on_select = lambda _index: (show_posts(), update_board_actions())
     post_list.tree.bind("<Double-1>", edit_selected_post)
     post_list.tree.bind("<Return>", edit_selected_post)
     post_list.tree.bind("<BackSpace>", delete_selected_post)
@@ -863,7 +915,7 @@ def main():
             items = []
             try:
                 for board in selected_boards[:20]:
-                    items += [(board, entry) for entry in BoardBrowser(database).posts(board["id"])[:5]]
+                    items += [(board, entry) for entry in BoardBrowser(database).posts(board["id"])]  # pinned-first, so take all
             except DATA_ERRORS as exc:
                 recent.set_rows([], placeholder=f"Couldn't read posts: {exc}", tag="error")
                 recent.frame.pack(fill="both", expand=True)
