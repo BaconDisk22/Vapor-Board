@@ -39,6 +39,22 @@ class ShopConfigTests(unittest.TestCase):
             with self.assertRaises(ValueError):
                 load_shop_config(path)
 
+    def test_appearance_and_text_size(self):
+        config = ShopConfig()
+        self.assertEqual((config.appearance, config.text_size), ("system", "standard"))
+        ShopConfig(appearance="dark", text_size="larger")
+        for kwargs in ({"appearance": "purple"}, {"text_size": "huge"}, {"appearance": None}):
+            with self.subTest(kwargs=kwargs):
+                with self.assertRaises(ValueError):
+                    ShopConfig(**kwargs)
+
+    def test_older_settings_files_still_load(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "shop.json"
+            path.write_text(json.dumps({"shop_name": "Old Shop", "operator_name": "Pat", "accent_color": "#112233"}))
+            config = load_shop_config(path)
+            self.assertEqual((config.shop_name, config.appearance, config.text_size), ("Old Shop", "system", "standard"))
+
 
 if __name__ == "__main__":
     unittest.main()
