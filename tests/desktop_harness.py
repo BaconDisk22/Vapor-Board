@@ -48,7 +48,8 @@ class DesktopHarness(unittest.TestCase):
         with mock.patch.object(Path, "home", return_value=self.home), \
                 mock.patch.object(tk.Tk, "mainloop", mainloop), \
                 mock.patch.multiple(desktop.messagebox, showwarning=unexpected, showerror=unexpected,
-                                    showinfo=unexpected, askyesno=unexpected):
+                                    showinfo=unexpected, askyesno=unexpected), \
+                mock.patch.object(desktop.filedialog, "askopenfilename", unexpected):
             desktop.main()
 
     # ---- finding things -----------------------------------------------------------------
