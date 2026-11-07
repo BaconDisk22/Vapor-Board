@@ -3,6 +3,7 @@
 Screens are drawn only with the components in ui_theme; wording comes from ui_format.
 """
 import sqlite3
+from datetime import timezone
 import subprocess
 import sys
 import tkinter as tk
@@ -18,7 +19,8 @@ from .bbs import BulletinBoard
 from .ui_format import friendly_time, radio_presentation, first_line, plural
 from . import ui_theme as theme
 from .ui_theme import XS, SM, MD, LG, XL
-from tkinter import messagebox
+from tkinter import messagebox, filedialog
+from . import backup as backups
 
 # Sidebar order, grouped so everyday work sits above shop administration.
 NAVIGATION = (
@@ -638,7 +640,9 @@ def main():
                 ttk.Separator(grid).grid(row=row, column=0, columnspan=2, sticky="ew", pady=t.px(SM))
                 row += 1
             ttk.Label(grid, text=label, style="Card.TLabel").grid(row=row, column=0, sticky="w")
-            if isinstance(value, tuple) and value[0] == "swatch":
+            if isinstance(value, tk.StringVar):
+                ttk.Label(grid, textvariable=value, style="Card.Strong.TLabel", wraplength=t.px(200), justify="right").grid(row=row, column=1, sticky="e")
+            elif isinstance(value, tuple) and value[0] == "swatch":
                 tk.Label(grid, text=f"■  {value[1]}", bg=p.card, fg=readable_accent, font=t.fonts["body_bold"]).grid(row=row, column=1, sticky="e")
             elif isinstance(value, tuple):
                 kind, text = value
@@ -647,7 +651,11 @@ def main():
             else:
                 ttk.Label(grid, text=value, style="Card.Strong.TLabel", wraplength=t.px(200), justify="right").grid(row=row, column=1, sticky="e")
             row += 1
-            if note:
+            if isinstance(note, tk.StringVar):
+                ttk.Label(grid, textvariable=note, style="Card.Caption.TLabel", wraplength=t.px(330), justify="left").grid(
+                    row=row, column=0, columnspan=2, sticky="w", pady=(2, 0))
+                row += 1
+            elif note:
                 ttk.Label(grid, text=note, style="Card.Caption.TLabel", wraplength=t.px(330), justify="left").grid(
                     row=row, column=0, columnspan=2, sticky="w", pady=(2, 0))
                 row += 1
@@ -662,10 +670,66 @@ def main():
         ("Appearance", appearance, None),
         ("Text size", config.text_size.title(), None),
     ))
+    backup_folder = database.parent / "backups"
+    database_state = tk.StringVar()
+    last_backup = tk.StringVar()
+
+    def refresh_storage():
+        database_state.set("Found" if database.exists() else "Not created yet")
+        latest = next((b for b in backups.list_backups(backup_folder) if not b.label), None)
+        when = friendly_time(latest.created.astimezone(timezone.utc).strftime("%Y-%m-%d %H:%M:%S")) if latest else "none yet"
+        last_backup.set(f"{short_path(database)}  ·  Last backup: {when}")
+        backup_now.state(["!disabled"] if database.exists() else ["disabled"])
+
+    # Backup buttons live in the page header: the left column has no spare height at 900x600.
     settings_card(left_settings, "Storage", (
         ("Settings file", "Found" if config_path.exists() else "Not created (defaults)", short_path(config_path)),
-        ("Database", "Found" if database.exists() else "Not created yet", short_path(database)),
+        ("Database", database_state, last_backup),
     ), pady=(t.px(LG), 0))
+
+    def back_up_now():
+        try:
+            made = backups.create_backup(database, backup_folder)
+        except backups.BackupError as exc:
+            notify("danger", "Backup not made", str(exc))
+            return
+        refresh_storage()
+        notify("success", "Backup saved", f"{made.summary} copied to {short_path(made.path)}.")
+
+    def restore_from_backup():
+        chosen = filedialog.askopenfilename(
+            parent=root, title="Choose a Vapor Board backup", initialdir=str(backup_folder if backup_folder.is_dir() else database.parent),
+            filetypes=[("Vapor Board backup", "*.sqlite"), ("All files", "*")])
+        if not chosen:
+            return
+        try:
+            info = backups.inspect(chosen)
+        except backups.BackupError as exc:
+            notify("danger", "Can't restore that file", str(exc))
+            return
+        if not messagebox.askyesno(
+                "Restore this backup?",
+                f"Replace everything on this Mac with the backup from {info.created:%-d %b %Y at %-I:%M %p} ({info.summary})?\n\n"
+                "Your current boards and messages are saved as a backup first, so you can undo this.",
+                icon="warning", default="no", parent=root):
+            return
+        try:
+            safety = backups.restore_backup(chosen, database, backup_folder)
+        except backups.BackupError as exc:
+            notify("danger", "Restore failed", str(exc))
+            return
+        cancel_edit()
+        refresh_boards()
+        refresh_mail()
+        refresh_overview()
+        refresh_storage()
+        notify("success", "Backup restored",
+               f"{info.summary} restored." + (f" Previous data saved as {safety.path.name}." if safety else ""))
+
+    backup_now = ttk.Button(settings_actions, text="Back up now", command=back_up_now)
+    backup_now.pack(side="left")
+    ttk.Button(settings_actions, text="Restore…", command=restore_from_backup).pack(side="left", padx=(t.px(SM), 0))
+    refresh_storage()
     settings_card(right_settings, "Radio & network", (
         ("Radio transmit", ("success", "On") if config.transmissions_enabled else ("neutral", "Off"),
          "Vapor Board only listens to the mesh. Sending is not available yet."),
@@ -690,7 +754,7 @@ def main():
             notify("danger", "Couldn't open Finder", str(exc))
 
     if sys.platform == "darwin":
-        ttk.Button(settings_actions, text="Show in Finder", command=reveal_settings).pack()
+        ttk.Button(settings_actions, text="Show in Finder", command=reveal_settings).pack(side="left", padx=(t.px(SM), 0))
 
     # ==== Overview =========================================================================
     # Radio connections are explicit and receive-only.
